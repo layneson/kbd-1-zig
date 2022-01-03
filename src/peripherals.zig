@@ -1,7 +1,7 @@
 pub const rcc = @intToPtr(*volatile packed struct {
     cr: u32,
     _reserved0: u32,
-    _reserved1: u32,
+    crrcr: u32,
     cfgr: u32,
     _reserved2: u32,
     _reserved3: u32,
@@ -13,6 +13,12 @@ pub const rcc = @intToPtr(*volatile packed struct {
     iopenr: u32,
     _reserved9: u32,
     apb2enr: u32,
+    apb1enr: u32,
+    _reserved11: u32,
+    _reserved12: u32,
+    _reserved13: u32,
+    _reserved14: u32,
+    ccipr: u32,
 }, 0x4002_1000);
 
 pub const Gpio = packed struct {
@@ -44,6 +50,23 @@ pub const Usart = packed struct {
     tdr: u32,
 };
 pub const usart1 = @intToPtr(*volatile Usart, 0x4001_3800);
+
+pub const syscfg = @intToPtr(*volatile packed struct{
+    _reserved0: u32,
+    _reserved1: u32,
+    _reserved2: u32,
+    _reserved3: u32,
+    _reserved4: u32,
+    _reserved5: u32,
+    _reserved6: u32,
+    _reserved7: u32,
+    cfgr3: u32,
+}, 0x4001_0000);
+
+pub const crs = @intToPtr(*volatile packed struct{
+    cr: u32,
+    cfgr: u32,
+}, 0x4000_6C00);
 
 pub const Interrupt = enum {
     WWDG,
