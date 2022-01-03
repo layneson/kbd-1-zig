@@ -39,12 +39,16 @@ pub fn main() noreturn {
     mcu.crs.enableUsbAutoTrim();
     mcu.rcc.hsi48.enableAndWaitUntilReady();
 
-    while (true) {
+    const writer = mcu.usart.writer(.usart1);
+
+    var counter: u32 = 0;
+
+    while (true) : (counter += 1) {
         mcu.gpio.set(.c, 15);
         mcu.delay(16_000_000, 500_000);
         mcu.gpio.clear(.c, 15);
         mcu.delay(16_000_000, 500_000);
 
-        mcu.usart.write(.usart1, "BLUBBER ");
+        writer.print("Counter: {d}", .{ counter }) catch {};
     }
 }

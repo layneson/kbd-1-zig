@@ -233,6 +233,24 @@ pub const usart = struct {
             while (getBits(u.isr, 6, 6) != 1) {}
         }
     }
+
+    pub fn writer(instance: Instance) Writer {
+        return .{ .context = .{ .instance = instance } };
+    }
+
+    pub const Writer = std.io.Writer(WriterContext, WriterContext.WriteError, WriterContext.writeFn);
+
+    pub const WriterContext = struct {
+        instance: Instance,
+        
+        pub const WriteError = error {
+        };
+
+        pub fn writeFn(self: WriterContext, bytes: []const u8) WriteError!usize {
+            write(self.instance, bytes);
+            return bytes.len;
+        }
+    };
 };
 
 pub const syscfg = struct {
