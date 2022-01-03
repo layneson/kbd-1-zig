@@ -28,7 +28,7 @@ pub fn main() noreturn {
     // UART
     mcu.gpio.setMode(.b, 6, .alternate); // TX
     mcu.gpio.setAlternateFunction(.b, 6, 0);
-    mcu.usart.init(.usart1, 16_000_000, 9600);
+    mcu.usart.init(.usart1, 16_000_000, 576000);
     mcu.usart.start(.usart1, .{ .transmit = true });
 
     // USB SETUP
