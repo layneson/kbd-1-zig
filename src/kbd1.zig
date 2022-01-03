@@ -39,8 +39,6 @@ pub fn main() noreturn {
     mcu.crs.enableUsbAutoTrim();
     mcu.rcc.hsi48.enableAndWaitUntilReady();
 
-    const writer = mcu.usart.writer(.usart1);
-
     var counter: u32 = 0;
 
     while (true) : (counter += 1) {
@@ -49,6 +47,27 @@ pub fn main() noreturn {
         mcu.gpio.clear(.c, 15);
         mcu.delay(16_000_000, 500_000);
 
-        writer.print("Counter: {d}", .{ counter }) catch {};
+        std.log.debug("Counter: {d}", .{ counter });
     }
 }
+
+pub fn log(
+    comptime level: std.log.Level,
+    comptime scope: @TypeOf(.enum_literal),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    const level_prefix = "[" ++ switch (level) {
+        .err => "E",
+        .warn => "W",
+        .info => "I",
+        .debug => "D",
+    } ++ "] ";
+
+    const scope_name = @tagName(scope);
+    const scope_prefix = if (scope == .default) "" else "(" ++ scope_name ++ ") ";
+
+    mcu.usart.writer(.usart1).print(level_prefix ++ scope_prefix ++ format ++ "\n", args) catch {};
+}
+
+pub const log_level = .debug;
