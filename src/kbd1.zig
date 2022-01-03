@@ -12,15 +12,30 @@ pub fn main() noreturn {
     rcc.hsi.enableAndWaitUntilReady();
     rcc.sys.setSourceAndWaitUntilReady(.hsi);
 
-    rcc.gpio.enablePortC();
+    rcc.ahb.setPrescaler(.none);
+    rcc.apb.setApb1Prescaler(.none);
+    rcc.apb.setApb2Prescaler(.none);
 
+    rcc.gpio.enablePortB();
+    rcc.gpio.enablePortC();
+    rcc.apb.enableUsart1();
+
+    // LED
     gpio.setMode(.c, 15, .output);
+
+    // UART
+    gpio.setMode(.b, 6, .alternate); // TX
+    gpio.setAlternateFunction(.b, 6, 0);
+    usart.init(.usart1, 16_000_000, 9600);
+    usart.start(.usart1, .{ .transmit = true });
 
     while (true) {
         gpio.set(.c, 15);
         delay(16_000_000, 500_000);
         gpio.clear(.c, 15);
         delay(16_000_000, 500_000);
+
+        usart.write(.usart1, "BLUBBER ");
     }
 }
 
@@ -72,9 +87,49 @@ const rcc = struct {
         }
     };
 
-    const gpio = struct {
+    pub const gpio = struct {
+        pub fn enablePortB() void {
+            setBits(&mcu.rcc.iopenr, 1, 1, 1);
+        }
+
         pub fn enablePortC() void {
             setBits(&mcu.rcc.iopenr, 2, 2, 1);
+        }
+    };
+
+    pub const apb = struct {
+        pub const Prescaler = enum {
+            none,
+
+            pub fn toBits(self: Prescaler) u3 {
+                return switch (self) {
+                    .none => 0b000,
+                };
+            }
+        };
+
+        pub fn setApb1Prescaler(prescaler: Prescaler) void {
+            setBits(&mcu.rcc.cfgr, 8, 10, prescaler.toBits());
+        }
+
+        pub fn setApb2Prescaler(prescaler: Prescaler) void {
+            setBits(&mcu.rcc.cfgr, 11, 13, prescaler.toBits());
+        }
+
+        pub fn enableUsart1() void {
+            setBits(&mcu.rcc.apb2enr, 14, 14, 1);
+        }
+    };
+
+    pub const ahb = struct {
+        pub const Prescaler = enum {
+            none,
+        };
+
+        pub fn setPrescaler(prescaler: Prescaler) void {
+            setBits(&mcu.rcc.cfgr, 4, 7, switch(prescaler) {
+                .none => 0b0000,
+            });
         }
     };
 };
@@ -83,25 +138,41 @@ const gpio = struct {
     pub const Mode = enum {
         input,
         output,
+        alternate,
     };
     
     pub const Port = enum {
+        b,
         c,
     };
 
     pub fn setMode(port: Port, pin: u4, mode: Mode) void {
         const moder = switch (port) {
+            .b => &mcu.gpio_b.moder,
             .c => &mcu.gpio_c.moder,
         };
 
         setBitsRuntime(moder, @intCast(u5, pin) * 2, @intCast(u5, pin) * 2 + 1, switch (mode) {
             .input => 0b00,
             .output => 0b01,
+            .alternate => 0b10,
         });
+    }
+
+    pub fn setAlternateFunction(port: Port, pin: u4, alternate_function: u3) void {
+        const reg = switch (port) {
+            .b => if (pin < 0) &mcu.gpio_b.afrl else &mcu.gpio_b.afrh,
+            .c => if (pin < 8) &mcu.gpio_c.afrl else &mcu.gpio_c.afrh,
+        };
+
+        const offset = @as(u5, pin % 8) * 4;
+
+        setBitsRuntime(reg, offset, offset + 3, alternate_function);
     }
 
     pub fn set(port: Port, pin: u4) void {
         const bsrr = switch (port) {
+            .b => &mcu.gpio_b.bsrr,
             .c => &mcu.gpio_c.bsrr,
         };
 
@@ -110,10 +181,65 @@ const gpio = struct {
 
     pub fn clear(port: Port, pin: u4) void {
         const bsrr = switch (port) {
+            .b => &mcu.gpio_b.bsrr,
             .c => &mcu.gpio_c.bsrr,
         };
 
         setBitsRuntime(bsrr, @intCast(u5, pin) + 16, @intCast(u5, pin) + 16, 1);
+    }
+};
+
+const usart = struct {
+    pub const Instance = enum {
+        usart1,
+    };
+    
+    pub fn init(
+        comptime instance: Instance, 
+        comptime apb_clock_rate: comptime_int,
+        comptime baud_rate: comptime_int,
+    ) void {
+        const u = switch (instance) {
+            .usart1 => mcu.usart1,
+        };
+
+        // Oversampling of 16.
+        // BRR = USARTDIV.
+        const usartdiv: u16 = apb_clock_rate / baud_rate;
+
+        u.brr = usartdiv;
+
+        // Set stop bits.
+        setBits(&u.cr2, 12, 13, 0b00);
+
+        // Enable.
+        setBits(&u.cr1, 0, 0, 1);
+    }
+
+    pub const StartOptions = struct {
+        transmit: bool = false,
+        receive: bool = false,
+    };
+
+    pub fn start(instance: Instance, options: StartOptions) void {
+        const u = switch (instance) {
+            .usart1 => mcu.usart1,
+        };
+
+        if (options.transmit) setBits(&u.cr1, 3, 3, 1);
+        if (options.receive) setBits(&u.cr1, 2, 2, 1);
+    }
+
+    pub fn write(instance: Instance, buffer: []const u8) void {
+        const u = switch (instance) {
+            .usart1 => mcu.usart1,
+        };
+
+        for (buffer) |b| {
+            while (getBits(u.isr, 7, 7) != 1) {}
+            u.tdr = b;
+            while (getBits(u.isr, 6, 6) != 1) {}
+        }
     }
 };
 
