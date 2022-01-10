@@ -81,6 +81,7 @@ pub const rcc = struct {
         usart1,
         syscfg,
         crs,
+        usb,
     };
 
     pub fn enablePeripheralClock(peripheral: Peripheral) void {
@@ -90,6 +91,7 @@ pub const rcc = struct {
             .usart1 => setBits(&mcu.rcc.apb2enr, 14, 14, 1),
             .syscfg => setBits(&mcu.rcc.apb2enr, 0, 0, 1),
             .crs => setBits(&mcu.rcc.apb1enr, 27, 27, 1),
+            .usb => setBits(&mcu.rcc.apb1enr, 23, 23, 1),
         }
     }
 
@@ -153,7 +155,7 @@ pub const gpio = struct {
 
     pub fn setAlternateFunction(port: Port, pin: u4, alternate_function: u3) void {
         const reg = switch (port) {
-            .b => if (pin < 0) &mcu.gpio_b.afrl else &mcu.gpio_b.afrh,
+            .b => if (pin < 8) &mcu.gpio_b.afrl else &mcu.gpio_b.afrh,
             .c => if (pin < 8) &mcu.gpio_c.afrl else &mcu.gpio_c.afrh,
         };
 
@@ -267,6 +269,51 @@ pub const crs = struct {
     }
 };
 
+pub const usb = struct {
+    pub fn init() void {
+        mcu.usb.cntr = 0;
+        mcu.usb.btable = 0;
+        mcu.usb.istr = 0;
+
+        // Enable USB and disable all interrupts (since we use a polling model).
+        mcu.usb.cntr = 0;
+
+        // Enable the pullup on the DP line.
+        // We can signal disconnect to the host by setting this back to 0.
+        setBits16(&mcu.usb.bcdr, 15, 15, 1);
+    }
+
+    pub const PollResult = enum {
+        none,
+        reset,
+    };
+
+    pub fn poll() PollResult {
+        // We need to:
+        //   (a) Sample ISTR once at the beginning;
+        //   (b) Clear the bits we handle.
+
+        const istr = mcu.usb.istr;
+
+        if (getBits16(istr, 10, 10) == 1) {
+            // Reset.
+
+            setBits16(&mcu.usb.istr, 10, 10, 0);
+
+            // TODO: Reset global state.
+            return .reset;
+        }
+
+        return .none;
+    }
+
+    const State = struct {
+        
+    };
+
+    var global_state: State = .{};
+};
+
 pub fn delay(comptime f_cpu_hz: comptime_int, comptime delay_us: comptime_int) void {
     // On an m0+, nop takes 1 cycle, and then b.n can take 1 or 2 (the documentation link was broken).
     // Let's assume 2. Then each loop iteration is three cycles, or f_cpu / 3. Then we have f_cpu/3 iter/sec.
@@ -282,7 +329,7 @@ pub fn delay(comptime f_cpu_hz: comptime_int, comptime delay_us: comptime_int) v
     }
 }
 
-pub fn InclusiveBitsType(comptime start: u5, comptime end: u5) type {
+pub fn InclusiveBitsType(comptime start: comptime_int, comptime end: comptime_int) type {
     return std.meta.Int(.unsigned, end-start+1);
 }
 
@@ -330,5 +377,54 @@ pub fn getBitsRuntime(
 ) u32 {
     const mask_bits = end - start + 1;
     const mask = (@as(u32, 1) << mask_bits) - 1;
+    return (reg_value & (mask << start)) >> start;
+}
+
+// Copypasta from above for 16-bit registers (really just the USB peripheral)
+// Inclusive on both sides (since that's how the datasheet does it).
+
+pub fn setBits16(
+    reg: *align(1) volatile u16,
+    comptime start: u4,
+    comptime end: u4,
+    value: InclusiveBitsType(start, end),
+) void {
+    const mask = ~@as(InclusiveBitsType(start, end), 0);
+    reg.* &= ~(@as(u16, mask) << start);
+    reg.* |= (@as(u16, value) << start);
+}
+
+// Inclusive on both sides.
+pub fn getBits16(
+    reg_value: u16,
+    comptime start: u4,
+    comptime end: u4,
+) InclusiveBitsType(start, end) {
+    const mask = ~@as(InclusiveBitsType(start, end), 0);
+    return @intCast(
+        InclusiveBitsType(start, end),
+        (reg_value & (@as(u16, mask) << start)) >> start,
+    );
+}
+
+pub fn setBitsRuntime16(
+    reg: *align(1) volatile u16,
+    start: u4,
+    end: u4,
+    value: u16,
+) void {
+    const mask_bits = end - start + 1;
+    const mask = (@as(u16, 1) << mask_bits) - 1;
+    reg.* &= ~(mask << start);
+    reg.* |= (value << start);
+}
+
+pub fn getBitsRuntime16(
+    reg_value: u16,
+    start: u4,
+    end: u4,
+) u32 {
+    const mask_bits = end - start + 1;
+    const mask = (@as(u16, 1) << mask_bits) - 1;
     return (reg_value & (mask << start)) >> start;
 }

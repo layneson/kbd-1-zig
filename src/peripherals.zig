@@ -68,6 +68,43 @@ pub const crs = @intToPtr(*volatile packed struct{
     cfgr: u32,
 }, 0x4000_6C00);
 
+// USB uses 16-bit registers.
+pub const usb = @intToPtr(*volatile packed struct{
+    ep0r: u16,
+    _reserved0: u16,
+    ep1r: u16,
+    _reserved1: u16,
+    ep2r: u16,
+    _reserved2: u16,
+    ep3r: u16,
+    _reserved3: u16,
+    ep4r: u16,
+    _reserved4: u16,
+    ep5r: u16,
+    _reserved5: u16,
+    ep6r: u16,
+    _reserved6: u16,
+    ep7r: u16,
+    _reserved7: u16,
+
+    _reserved8: u256,
+
+    cntr: u16,
+    _reserved9: u16,
+    istr: u16,
+    _reserved10: u16,
+    fnr: u16,
+    _reserved11: u16,
+    daddr: u16,
+    _reserved12: u16,
+    btable: u16,
+    _reserved13: u16,
+    lpmcsr: u16,
+    _reserved14: u16,
+    bcdr: u16,
+    _reserved15: u16,
+}, 0x4000_5C00);
+
 pub const Interrupt = enum {
     WWDG,
     PVD,

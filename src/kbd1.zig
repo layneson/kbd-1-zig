@@ -39,15 +39,19 @@ pub fn main() noreturn {
     mcu.crs.enableUsbAutoTrim();
     mcu.rcc.hsi48.enableAndWaitUntilReady();
 
-    var counter: u32 = 0;
+    mcu.rcc.enablePeripheralClock(.usb);
 
-    while (true) : (counter += 1) {
-        mcu.gpio.set(.c, 15);
-        mcu.delay(16_000_000, 500_000);
-        mcu.gpio.clear(.c, 15);
-        mcu.delay(16_000_000, 500_000);
+    mcu.usb.init();
 
-        std.log.debug("Counter: {d}", .{ counter });
+    mcu.gpio.set(.c, 15);
+    mcu.delay(16_000_000, 500_000);
+    mcu.gpio.clear(.c, 15);
+
+    while (true) {
+        switch (mcu.usb.poll()) {
+            .none => {},
+            .reset => mcu.gpio.set(.c, 15),
+        }
     }
 }
 
