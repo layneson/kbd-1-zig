@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const mcu = @import("peripherals.zig");
+const usb_std = @import("usb_std.zig");
 
 pub const rcc = struct {
     pub const hsi16 = struct {
@@ -269,6 +270,15 @@ pub const crs = struct {
 };
 
 pub const UsbDeviceDescription = struct {
+    class: u8,
+    subclass: u8,
+    protocol: u8,
+    vendor_id: u16,
+    product_id: u16,
+    manufacturer_descriptor_idx: u8,
+    product_descriptor_idx: u8,
+    serial_number_descriptor_idx: u8,
+
     endpoints: []const Endpoint,
 
     pub const Endpoint = struct {
@@ -307,10 +317,12 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
             setBits16(&mcu.usb.bcdr, 15, 15, 1);
         }
 
-        pub const PollResult = enum {
+        pub const PollResult = union(enum) {
             none,
             reset,
-            setup,
+            setup: u3,
+            received: u3,
+            sent: u3,
         };
 
         pub fn poll() PollResult {
@@ -335,7 +347,7 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
 
                 setupEndpoints();
 
-                return .reset;
+                return .{ .reset = {} };
             }
 
             if (getBits16(istr, 15, 15) == 1) {
@@ -363,7 +375,7 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
 
                         process_out_or_setup = true;
 
-                        if (getBits16(ep_reg.*, 7, 7) == 1) {
+                        if (ep_reg.getCtrTx() == 1) {
                             // Also IN
                             process_in = true;
                         }
@@ -371,14 +383,11 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
                 }
 
                 if (process_out_or_setup) {
-                    // Set status back to VALID. Do this at the end.
-                    defer setBits16(ep_reg, 12, 13, 0b11);
-
                     // Clear CTR_RX.
                     // Datasheet wants us to do this before reading the packet.
-                    setBits16(ep_reg, 15, 15, 0);
+                    ep_reg.clearCtrRx();
 
-                    if (getBits16(ep_reg.*, 11, 11) == 1) {
+                    if (ep == 0 and ep_reg.getSetup() == 1) {
                         // It is SETUP, not OUT!
 
                         const table_entry = getBdtBidirectionalEntry(ep);
@@ -389,22 +398,70 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
 
                         copyFromPbm(global_state.ep0_packet_buffer[0..packet_len], pbm_offset);
 
-                        return .setup;
+                        const setup_packet = @ptrCast(*const usb_std.Setup, global_state.ep0_packet_buffer[0..packet_len]).*;
+
+                        if (
+                            setup_packet.bmRequestType == 0b1000_0000 and
+                            setup_packet.bRequest == 6 and
+                            (setup_packet.wValue >> 8) == 1
+                        ) {
+                            // GET_DESCRIPTOR (device).
+                            // Reply with device descriptor.
+
+                            const device_descriptor = buildDeviceDescriptor();
+
+                            global_state.last_sent_on_0_was_internal = true;
+                            sendPacket(ep, &std.mem.toBytes(device_descriptor));
+
+                            // TODO REMOVE ME
+                            gpio.set(.c, 15);
+                        }
+
+                        // Set status back to VALID so that another packet can be received.
+                        ep_reg.setStatRx(0b11);
+
+                        return .{ .setup = ep };
                     } else {
                         // TODO: Handle OUT.
                     }
                 }
 
                 if (process_in) {
-                    // TODO: Handle IN. Read the datasheet section about how to properly handle.
-
                     // Clear CTR_TX.
-                    setBits16(ep_reg, 7, 7, 0);
+                    ep_reg.clearCtrTx();
+
+                    if (ep == 0 and global_state.last_sent_on_0_was_internal) {
+                        global_state.last_sent_on_0_was_internal = false;
+
+                        // Don't notify.
+                        return .{ .none = {} };
+                    } else {
+                        return .{ .received = ep };
+                    }
                 }
 
             }
 
-            return .none;
+            return .{ .none = {} };
+        }
+
+        fn buildDeviceDescriptor() usb_std.DeviceDescriptor {
+            return .{
+                .bLength = @sizeOf(usb_std.DeviceDescriptor),
+                .bDescriptorType = 1, // DEVICE
+                .bcdUSB = 0x0200,
+                .bDeviceClass = desc.class,
+                .bDeviceSubClass = desc.subclass,
+                .bDeviceProtocol = desc.protocol,
+                .bMaxPacketSize0 = @intCast(u8, desc.endpoints[0].max_packet_size),
+                .idVendor = desc.vendor_id,
+                .idProduct = desc.product_id,
+                .bcdDevice = 0x0100,
+                .iManufacturer = desc.manufacturer_descriptor_idx,
+                .iProduct = desc.product_descriptor_idx,
+                .iSerialNumber = desc.serial_number_descriptor_idx,
+                .bNumConfigurations = 1, // Hardcode this since we won't need anything more.
+            };
         }
 
         /// This must be called upon reset.
@@ -424,10 +481,10 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
                 const ep_reg = endpointRegister(ep_addr);
 
                 // Set the address for the endpoint.
-                setBits16(ep_reg, 0, 3, @intCast(u4, ep_addr));
+                ep_reg.setEa(ep_addr);
 
                 // Set endpoint type.
-                setBits16(ep_reg, 9, 10, switch (ep.ep_type) {
+                ep_reg.setEpType(switch (ep.ep_type) {
                     .control => 0b01,
                     .isochronous => 0b10,
                     .bulk => 0b00,
@@ -437,15 +494,18 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
                 // Need to set up either send or receive.
 
                 const table_entry = getBdtBidirectionalEntry(ep_addr);
+                table_entry.tx_count = 0;
+                table_entry.rx_count = 0;
 
                 if (ep.direction.in or ep_addr == 0) {
                     table_entry.tx_addr = packet_mem_top;
 
                     // Set data toggle so that first packet is DATA0.
-                    setBits16(ep_reg, 6, 6, 0);
+                    // TODO: Make sure to set this properly for non-control endpoints.
+                    ep_reg.setDtogTx(0);
 
                     // Set status to NAK since no data is buffered to be sent.
-                    setBits16(ep_reg, 4, 5, 0b10);
+                    ep_reg.setStatTx(0b10);
 
                     packet_mem_top += ep.max_packet_size;
                 }
@@ -454,7 +514,8 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
                     table_entry.rx_addr = packet_mem_top;
 
                     // Set data toggle so that first packet is DATA0.
-                    setBits16(ep_reg, 14, 14, 0);
+                    // TODO: Make sure to set this properly for non-control endpoints.
+                    ep_reg.setDtogRx(0);
 
                     // Need to set the table_entry.rx_count so that the USB peripheral knows how much space we've allocated for this packet.
                     // Complication: this is not as straightforward as just setting it to the max packet size.
@@ -486,16 +547,153 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
                     setBits16(&table_entry.rx_count, 15, 15, bl_size);
 
                     // Set status to VALID so that we can receive packets.
-                    setBits16(ep_reg, 12, 13, 0b11);
+                    ep_reg.setStatRx(0b11);
 
                     packet_mem_top += real_size;
                 }
             }
         }
 
+        /// Only call this if poll() notifies of reception!
+        /// This signals to the peripheral that the packet has been read and can
+        /// be internally overwritten by the next incoming packet. Thus, this
+        /// can only be called once per incoming packet!
+        pub fn readPacket(ep_addr: u3, buffer: []u8) void {
+            const ep_reg = endpointRegister(ep_addr);
+            const table_entry = getBdtBidirectionalEntry(ep_addr);
+
+            // Count is only 10 bits of the rx_count register.
+            const packet_len = @intCast(u16, getBits16(table_entry.rx_count, 0, 9));
+
+            copyFromPbm(buffer[0..std.math.min(buffer.len, packet_len)], table_entry.rx_addr);
+
+            // Set status back to VALID so that another packet can be received.
+            ep_reg.setStatRx(0b11);
+        }
+
+        /// Places this packet in the packet memory for this endpoint and signals
+        /// that a packet is ready to send if the host provides an IN packet.
+        ///
+        /// Only call this once until poll() returns sent for this ep!
+        pub fn sendPacket(ep_addr: u3, packet: []const u8) void {
+            const ep_reg = endpointRegister(ep_addr);
+
+            const table_entry = getBdtBidirectionalEntry(ep_addr);
+
+            @call(.{}, copyToPbm, .{ table_entry.tx_addr, packet });
+            table_entry.tx_count = @intCast(u16, packet.len);
+
+            // Set status to VALID so that we can send the packet.
+            ep_reg.setStatTx(0b11);
+        }
+
+        /// We abstract this because writing to this register is weird.
+        /// There are a number of bits that are toggle-only, which is not how we want
+        /// to use them (we want to just the the bits).
+        const EndpointRegister = struct {
+            reg: *align(1) volatile u16,
+
+            /// Where should we write ones if we don't want to change value?
+            const write_ones_mask: u16 = 0b1000_0000_1000_0000;
+            /// Where should be write the read value if we don't want to change value?
+            const write_original_mask: u16 = 0b0000_1111_0000_1111;
+
+            /// Adapted from setBits16, but writes the correct value to perserve toggle & set-on-0 registers.
+            /// Note that the correct toggle bits need to be set here!
+            fn setEpnrBits(
+                reg: *align(1) volatile u16,
+                comptime start: u4,
+                comptime end: u4,
+                value: InclusiveBitsType(start, end),
+            ) void {
+                // Contains the bits that we write in everywhere we don't care about.
+                const backing_value = (reg.* & write_original_mask) | (@as(u16, 0xFFFF) & write_ones_mask);
+
+                const mask = ~@as(InclusiveBitsType(start, end), 0);
+
+                reg.* = (backing_value & ~(@as(u16, mask) << start)) | (@as(u16, value) << start);
+            }
+
+            pub fn getCtrRx(self: EndpointRegister) u1 {
+                return getBits16(self.reg.*, 15, 15);
+            }
+
+            pub fn clearCtrRx(self: EndpointRegister) void {
+                setEpnrBits(self.reg, 15, 15, 0);
+            }
+
+            pub fn getDtogRx(self: EndpointRegister) u1 {
+                return getBits16(self.reg.*, 14, 14);
+            }
+
+            pub fn setDtogRx(self: EndpointRegister, value: u1) void {
+                setEpnrBits(self.reg, 15, 15, self.getDtogRx() ^ value);
+            }
+
+            pub fn getStatRx(self: EndpointRegister) u2 {
+                return getBits16(self.reg.*, 12, 13);
+            }
+
+            pub fn setStatRx(self: EndpointRegister, value: u2) void {
+                setEpnrBits(self.reg, 12, 13, self.getStatRx() ^ value);
+            }
+
+            pub fn getSetup(self: EndpointRegister) u1 {
+                return getBits16(self.reg.*, 11, 11);
+            }
+
+            pub fn getEpType(self: EndpointRegister) u2 {
+                return getBits16(self.reg.*, 9, 10);
+            }
+
+            pub fn setEpType(self: EndpointRegister, value: u2) void {
+                setEpnrBits(self.reg, 9, 10, value);
+            }
+
+            pub fn getEpKind(self: EndpointRegister) u1 {
+                return getBits16(self.reg.*, 8, 8);
+            }
+
+            pub fn setEpKind(self: EndpointRegister, value: u1) void {
+                setEpnrBits(self.reg, 8, 8, value);
+            }
+
+            pub fn getCtrTx(self: EndpointRegister) u1 {
+                return getBits16(self.reg.*, 7, 7);
+            }
+
+            pub fn clearCtrTx(self: EndpointRegister) void {
+                setEpnrBits(self.reg, 7, 7, 0);
+            }
+
+            pub fn getDtogTx(self: EndpointRegister) u1 {
+                return getBits16(self.reg.*, 6, 6);
+            }
+
+            pub fn setDtogTx(self: EndpointRegister, value: u1) void {
+                setEpnrBits(self.reg, 6, 6, self.getDtogTx() ^ value);
+            }
+
+            pub fn getStatTx(self: EndpointRegister) u2 {
+                return getBits16(self.reg.*, 4, 5);
+            }
+
+            pub fn setStatTx(self: EndpointRegister, value: u2) void {
+                setEpnrBits(self.reg, 4, 5, self.getStatTx() ^ value);
+            }
+
+            pub fn getEa(self: EndpointRegister) u4 {
+                return getBits16(self.reg.*, 0, 3);
+            }
+
+            pub fn setEa(self: EndpointRegister, value: u4) void {
+                setEpnrBits(self.reg, 0, 3, value);
+            }
+        };
+
         /// Gets the register for the given endpoint address.
-        fn endpointRegister(ep_addr: u3) *align(1) volatile u16 {
-            return switch (ep_addr) {
+        fn endpointRegister(ep_addr: u3) EndpointRegister {
+            return .{ .reg = switch (ep_addr) {
                 0 => &mcu.usb.ep0r,
                 1 => &mcu.usb.ep1r,
                 2 => &mcu.usb.ep2r,
@@ -504,9 +702,8 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
                 5 => &mcu.usb.ep5r,
                 6 => &mcu.usb.ep6r,
                 7 => &mcu.usb.ep7r,
-            };
+            } };
         }
-
         /// BDT == Buffer Descriptor Table
         const BdtBidirectionalEntry = packed struct {
             tx_addr: u16,
@@ -529,10 +726,12 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
         /// 
         /// This is dest-source order since that's what Zig's mem.copy does.
         fn copyToPbm(dest_offset: u16, source: []const u8) void {
-            const dest = @intToPtr([*]volatile u8, mcu.usb_packet_memory_offset + @intCast(usize, dest_offset));
+            const dest = @intToPtr([*]volatile u16, mcu.usb_packet_memory_offset + @intCast(usize, dest_offset));
 
             for (source) |source_byte, i| {
-                dest[i] = source_byte;
+                if (i % 2 == 1) {
+                    dest[i/2] = @intCast(u16, source[i - 1]) | (@intCast(u16, source_byte) << 8);
+                }
             }
         }
 
@@ -546,7 +745,9 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
 
         const State = struct {
             address: u8 = 0,
-            setup_state: SetupState = .uninitialized,
+            /// If true for ep 0, the last packet sent was not from the user (internal, i.e. in response to SETUP),
+            /// so we shouldn't notify the user of successful sending.
+            last_sent_on_0_was_internal: bool = false,
             ep0_packet_buffer: [desc.endpoints[0].max_packet_size]u8 = undefined,
         };
 

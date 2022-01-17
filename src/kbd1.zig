@@ -51,14 +51,23 @@ pub fn main() noreturn {
         switch (usb.poll()) {
             .none => {},
             .reset => {},
-            .setup => {
-                mcu.gpio.set(.c, 15);
-            },
+            .setup => {},
+            .sent => {},
+            .received => {},
         }
     }
 }
 
 const usb = mcu.usb(.{
+    .class = 0, // Defined by interface
+    .subclass = 0,
+    .protocol = 0,
+    .vendor_id = 0x0483,
+    .product_id = 0x1111,
+    .manufacturer_descriptor_idx = 0,
+    .product_descriptor_idx = 0,
+    .serial_number_descriptor_idx = 0,
+
     .endpoints = &.{
         .{ // EP 0
             .ep_type = .control,

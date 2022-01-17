@@ -17,7 +17,7 @@ SECTIONS {
         LONG(__stack_top);
         KEEP(*(.isr_vector))
         KEEP(*(.irq_vector))
-        *(.text)
+        *(.text*)
         . = ALIGN(4);
     } > FLASH
 
