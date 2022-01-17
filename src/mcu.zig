@@ -410,33 +410,60 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
 
                             const device_descriptor = buildDeviceDescriptor();
 
-                            global_state.last_sent_on_0_was_internal = true;
+                            global_state.setup_state = .setup;
+                            
                             sendPacket(ep, &std.mem.toBytes(device_descriptor));
-
+                        } else if (
+                            setup_packet.bmRequestType == 0 and
+                            setup_packet.bRequest == 5
+                        ) {                
                             // TODO REMOVE ME
                             gpio.set(.c, 15);
+
+                            global_state.setup_state = .addressed;
+                            global_state.address = @intCast(u8, setup_packet.wValue);
+                            
+                            sendPacket(ep, &.{});
                         }
 
+                        // We are finished processing.
                         // Set status back to VALID so that another packet can be received.
                         ep_reg.setStatRx(0b11);
 
                         return .{ .setup = ep };
                     } else {
-                        // TODO: Handle OUT.
+                        if (ep == 0 and global_state.setup_state == .setup) {
+                            // Ignore.
+                            // Set status back to VALID so that another packet can be received.
+                            ep_reg.setStatRx(0b11);
+
+                            return .{ .none = {} };
+                        } else {
+                            return .{ .received = ep };
+                        }
                     }
+
+                    
                 }
 
                 if (process_in) {
                     // Clear CTR_TX.
-                    ep_reg.clearCtrTx();
+                    ep_reg.clearCtrTx();                   
 
-                    if (ep == 0 and global_state.last_sent_on_0_was_internal) {
-                        global_state.last_sent_on_0_was_internal = false;
+                    if (ep == 0 and global_state.setup_state != .finished) {
+                        if (global_state.setup_state == .addressed) {
+                            // SET_ADDRESS.
+                            setBits16(&mcu.usb.daddr, 0, 6, @intCast(u7, global_state.address));
+                        }
+
+                        // We've handled this.
+                        // Set status to VALID so that we can send more.
+                        ep_reg.setStatTx(0b11);
 
                         // Don't notify.
                         return .{ .none = {} };
                     } else {
-                        return .{ .received = ep };
+                        return .{ .sent = ep };
                     }
                 }
 
@@ -747,7 +774,7 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
             address: u8 = 0,
             /// If true for ep 0, the last packet sent was not from the user (internal, i.e. in response to SETUP),
             /// so we shouldn't notify the user of successful sending.
-            last_sent_on_0_was_internal: bool = false,
+            setup_state: SetupState = .uninitialized,
             ep0_packet_buffer: [desc.endpoints[0].max_packet_size]u8 = undefined,
         };
 
@@ -755,6 +782,12 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
         const SetupState = enum {
             /// The host has not sent any SETUP packets yet.
             uninitialized,
+            /// Initial endpoint-0 setup.
+            setup,
+            /// We have a non-zero address now.
+            addressed,
+            /// Fully set up.
+            finished,
         };
 
         var global_state: State = .{};
