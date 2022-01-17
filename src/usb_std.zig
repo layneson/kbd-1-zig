@@ -25,5 +25,39 @@ pub const DeviceDescriptor = packed struct {
     bNumConfigurations: u8,
 };
 
-// ZIG: 01 01 02 02 00 00 40 40 04 04 11 11 01 01 00 00 01 01
-// CM3: 12 01 00 02 00 00 00 40 83 04 11 11 00 02 01 02 03 01
+pub const ConfigurationDescriptor = packed struct {
+    bLength: u8,
+    bDescriptorType: u8,
+    wTotalLength: u16,
+    bNumInterfaces: u8,
+    bConfigurationValue: u8,
+    iConfiguration: u8,
+    bmAttributes: u8,
+    bMaxPower: u8,
+};
+
+pub const InterfaceDescriptor = packed struct {
+    bLength: u8,
+    bDescriptorType: u8,
+    bInterfaceNumber: u8,
+    bAlternateSetting: u8,
+    bNumEndpoints: u8,
+    bInterfaceClass: u8,
+    bInterfaceSubclass: u8,
+    bInterfaceProtocol: u8,
+    iInterface: u8,
+};
+
+pub const EndpointDescriptor = packed struct {
+    bLength: u8,
+    bDescriptorType: u8,
+    bEndpointAddress: u8,
+    bmAttributes: u8,
+    wMaxPacketSize: u16,
+    bInterval: u8,
+};
+
+pub const StringDescriptor = packed struct {
+    bLength: u8,
+    bDescriptorType: u8,
+};

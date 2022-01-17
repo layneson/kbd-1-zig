@@ -58,22 +58,45 @@ pub fn main() noreturn {
     }
 }
 
+// TODO: WE NEED TO CALCULATE TOTAL DESCRIPTOR LENGTH
+// IN THE CONFIGURATION DESCRIPTOR. THIS INCLUDES
+// VENDOR-DEFINED DESCRIPTORS. RIGHT NOW, THEY ARE
+// NOT TAKEN INTO ACCOUNT! WE NEED TO ADJUST THIS
+// WHEN DOING STUFF LIKE HID!
 const usb = mcu.usb(.{
     .class = 0, // Defined by interface
     .subclass = 0,
     .protocol = 0,
     .vendor_id = 0x0483,
     .product_id = 0x1111,
-    .manufacturer_descriptor_idx = 0,
-    .product_descriptor_idx = 0,
-    .serial_number_descriptor_idx = 0,
+    .manufacturer_descriptor_idx = 1,
+    .product_descriptor_idx = 2,
+    .serial_number_descriptor_idx = 3,
 
     .endpoints = &.{
         .{ // EP 0
             .ep_type = .control,
             .direction = .{ .in = true, .out = true },
             .max_packet_size = 64,
+            .poll_interval = 0, // Ignored for this endpoint.
         },
+    },
+
+    .interfaces = &.{
+        .{
+            .endpoint_ids = &.{},
+            .class = 0xFF, // vendor-defined.
+            .subclass = 0,
+            .protocol = 0,
+            .interface_descriptor_idx = 4,
+        },
+    },
+
+    .string_descriptors = &.{
+        "Ting",
+        "SuperTestThingy",
+        "SN0001",
+        "Vendor Thingy",
     },
 });
 
