@@ -41,19 +41,32 @@ pub fn main() noreturn {
 
     mcu.rcc.enablePeripheralClock(.usb);
 
-    mcu.usb.init();
+    usb.init();
 
     mcu.gpio.set(.c, 15);
     mcu.delay(16_000_000, 500_000);
     mcu.gpio.clear(.c, 15);
 
     while (true) {
-        switch (mcu.usb.poll()) {
+        switch (usb.poll()) {
             .none => {},
-            .reset => mcu.gpio.set(.c, 15),
+            .reset => {},
+            .setup => {
+                mcu.gpio.set(.c, 15);
+            },
         }
     }
 }
+
+const usb = mcu.usb(.{
+    .endpoints = &.{
+        .{ // EP 0
+            .ep_type = .control,
+            .direction = .{ .in = true, .out = true },
+            .max_packet_size = 64,
+        },
+    },
+});
 
 pub fn log(
     comptime level: std.log.Level,

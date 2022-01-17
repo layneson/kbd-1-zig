@@ -121,7 +121,7 @@ pub const rcc = struct {
         };
 
         pub fn setPrescaler(prescaler: Prescaler) void {
-            setBits(&mcu.rcc.cfgr, 4, 7, switch(prescaler) {
+            setBits(&mcu.rcc.cfgr, 4, 7, switch (prescaler) {
                 .none => 0b0000,
             });
         }
@@ -134,7 +134,7 @@ pub const gpio = struct {
         output,
         alternate,
     };
-    
+
     pub const Port = enum {
         b,
         c,
@@ -187,9 +187,9 @@ pub const usart = struct {
     pub const Instance = enum {
         usart1,
     };
-    
+
     pub fn init(
-        comptime instance: Instance, 
+        comptime instance: Instance,
         comptime apb_clock_rate: comptime_int,
         comptime baud_rate: comptime_int,
     ) void {
@@ -244,9 +244,8 @@ pub const usart = struct {
 
     pub const WriterContext = struct {
         instance: Instance,
-        
-        pub const WriteError = error {
-        };
+
+        pub const WriteError = error{};
 
         pub fn writeFn(self: WriterContext, bytes: []const u8) WriteError!usize {
             write(self.instance, bytes);
@@ -269,50 +268,297 @@ pub const crs = struct {
     }
 };
 
-pub const usb = struct {
-    pub fn init() void {
-        mcu.usb.cntr = 0;
-        mcu.usb.btable = 0;
-        mcu.usb.istr = 0;
+pub const UsbDeviceDescription = struct {
+    endpoints: []const Endpoint,
 
-        // Enable USB and disable all interrupts (since we use a polling model).
-        mcu.usb.cntr = 0;
-
-        // Enable the pullup on the DP line.
-        // We can signal disconnect to the host by setting this back to 0.
-        setBits16(&mcu.usb.bcdr, 15, 15, 1);
-    }
-
-    pub const PollResult = enum {
-        none,
-        reset,
+    pub const Endpoint = struct {
+        ep_type: EndpointType,
+        direction: struct { in: bool, out: bool },
+        max_packet_size: u16,
     };
 
-    pub fn poll() PollResult {
-        // We need to:
-        //   (a) Sample ISTR once at the beginning;
-        //   (b) Clear the bits we handle.
+    pub const EndpointType = enum {
+        control,
+        isochronous,
+        bulk,
+        interrupt,
+    };
+};
 
-        const istr = mcu.usb.istr;
+pub fn usb(comptime desc: UsbDeviceDescription) type {
+    return struct {
+        comptime {
+            // Just want to check desc.
 
-        if (getBits16(istr, 10, 10) == 1) {
-            // Reset.
-
-            setBits16(&mcu.usb.istr, 10, 10, 0);
-
-            // TODO: Reset global state.
-            return .reset;
+            if (desc.endpoints.len == 0) @compileError("endpoint 0 is required");
+            if (!desc.endpoints[0].direction.in or !desc.endpoints[0].direction.out) @compileError("endpoint 0 must be bi-directional");
         }
 
-        return .none;
-    }
+        pub fn init() void {
+            mcu.usb.cntr = 0;
+            mcu.usb.btable = 0;
+            mcu.usb.istr = 0;
 
-    const State = struct {
-        
+            // Enable USB and disable all interrupts (since we use a polling model).
+            mcu.usb.cntr = 0;
+
+            // Enable the pullup on the DP line.
+            // We can signal disconnect to the host by setting this back to 0.
+            setBits16(&mcu.usb.bcdr, 15, 15, 1);
+        }
+
+        pub const PollResult = enum {
+            none,
+            reset,
+            setup,
+        };
+
+        pub fn poll() PollResult {
+            // We need to:
+            //   (a) Sample ISTR once at the beginning;
+            //   (b) Clear the bits we handle.
+
+            const istr = mcu.usb.istr;
+
+            if (getBits16(istr, 10, 10) == 1) {
+                // Reset.
+
+                setBits16(&mcu.usb.istr, 10, 10, 0);
+
+                // Reset our global state.
+                global_state = .{};
+
+                // Set device address so that the USB peripheral responds to incoming data.
+                // Also enable.
+                setBits16(&mcu.usb.daddr, 0, 6, 0);
+                setBits16(&mcu.usb.daddr, 7, 7, 1);
+
+                setupEndpoints();
+
+                return .reset;
+            }
+
+            if (getBits16(istr, 15, 15) == 1) {
+                // CTR. A transaction was completed.
+                // If SETUP, we need to respond automatically with config info.
+                // If OUT, we need to hand the packet over to the user.
+                // If IN, we need to tell the user so they can send another if they so please.
+
+                // The EP_ID field is actually 4 bits ([0, 3]), but we constrain
+                // to the 8 lowest ids since we only have 8 endpoints and we don't need any more.
+                const ep = getBits16(istr, 0, 2);
+                const ep_reg = endpointRegister(ep);
+
+                var process_in: bool = false;
+                var process_out_or_setup: bool = false;
+
+                const direction = getBits16(istr, 4, 4);
+                switch (direction) {
+                    0 => {
+                        // IN
+                        process_in = true;
+                    },
+                    1 => {
+                        // OUT or SETUP and possibly IN
+
+                        process_out_or_setup = true;
+
+                        if (getBits16(ep_reg.*, 7, 7) == 1) {
+                            // Also IN
+                            process_in = true;
+                        }
+                    },
+                }
+
+                if (process_out_or_setup) {
+                    // Set status back to VALID. Do this at the end.
+                    defer setBits16(ep_reg, 12, 13, 0b11);
+
+                    // Clear CTR_RX.
+                    // Datasheet wants us to do this before reading the packet.
+                    setBits16(ep_reg, 15, 15, 0);
+
+                    if (getBits16(ep_reg.*, 11, 11) == 1) {
+                        // It is SETUP, not OUT!
+
+                        const table_entry = getBdtBidirectionalEntry(ep);
+                        const pbm_offset = table_entry.rx_addr;
+
+                        // Count is only 10 bits of the rx_count register.
+                        const packet_len = @intCast(u16, getBits16(table_entry.rx_count, 0, 9));
+
+                        copyFromPbm(global_state.ep0_packet_buffer[0..packet_len], pbm_offset);
+
+                        return .setup;
+                    } else {
+                        // TODO: Handle OUT.
+                    }
+                }
+
+                if (process_in) {
+                    // TODO: Handle IN. Read the datasheet section about how to properly handle.
+
+                    // Clear CTR_TX.
+                    setBits16(ep_reg, 7, 7, 0);
+                }
+
+            }
+
+            return .none;
+        }
+
+        /// This must be called upon reset.
+        fn setupEndpoints() void {
+            // Set up endpoints.
+
+            // Buffer descriptor table is 4 entries, 2 bytes each, for 8 total endpoints.
+            comptime var packet_mem_top: u16 = 8 * 4 * 2;
+
+            inline for (desc.endpoints) |ep, ep_idx| {
+                // Packet buffer accesses must be 2-byte aligned.
+                // Thus, the max packet size must be even. If it were odd, we might start a packet buffer on an odd offset, which is not allowed.
+                if (ep.max_packet_size & 0b1 != 0) @compileError("endpoints must have even max_packet_size");
+
+                const ep_addr = @intCast(u3, ep_idx);
+
+                const ep_reg = endpointRegister(ep_addr);
+
+                // Set the address for the endpoint.
+                setBits16(ep_reg, 0, 3, @intCast(u4, ep_addr));
+
+                // Set endpoint type.
+                setBits16(ep_reg, 9, 10, switch (ep.ep_type) {
+                    .control => 0b01,
+                    .isochronous => 0b10,
+                    .bulk => 0b00,
+                    .interrupt => 0b11,
+                });
+
+                // Need to set up either send or receive.
+
+                const table_entry = getBdtBidirectionalEntry(ep_addr);
+
+                if (ep.direction.in or ep_addr == 0) {
+                    table_entry.tx_addr = packet_mem_top;
+
+                    // Set data toggle so that first packet is DATA0.
+                    setBits16(ep_reg, 6, 6, 0);
+
+                    // Set status to NAK since no data is buffered to be sent.
+                    setBits16(ep_reg, 4, 5, 0b10);
+
+                    packet_mem_top += ep.max_packet_size;
+                }
+
+                if (ep.direction.out or ep_addr == 0) {
+                    table_entry.rx_addr = packet_mem_top;
+
+                    // Set data toggle so that first packet is DATA0.
+                    setBits16(ep_reg, 14, 14, 0);
+
+                    // Need to set the table_entry.rx_count so that the USB peripheral knows how much space we've allocated for this packet.
+                    // Complication: this is not as straightforward as just setting it to the max packet size.
+                    //
+                    // Following equations are from libopencm3 docs: (division rounds up!!!)
+                    //   if size <= 62: BL_SIZE = 0 and NUM_BLOCK = (size / 2). Real size = 2 * NUM_BLOCK.
+                    //   if ize > 62: BL_SIZE = 1 and NUM_BLOCK = ((size / 32) - 1). Real size = 32 * NUM_BLOCK.
+
+                    comptime var bl_size: u1 = 0;
+                    comptime var num_blocks: u5 = 0;
+                    comptime var real_size: u16 = 0;
+
+                    comptime {
+                        if (ep.max_packet_size <= 62) {
+                            bl_size = 0;
+                            num_blocks = (ep.max_packet_size + 1) / 2;
+                            real_size = @intCast(u16, num_blocks) * 2;
+                        } else {
+                            bl_size = 1;
+                            num_blocks = ((ep.max_packet_size + 31) / 32) - 1;
+                            real_size = @intCast(u16, num_blocks) * 32;
+                        }
+
+                        if (bl_size == 0 and num_blocks == 0) @compileError("usb: invalid receive buffer max size");
+                        if (real_size > 1024) @compileError("usb: receive buffer max size too large");
+                    }
+                    
+                    setBits16(&table_entry.rx_count, 10, 14, num_blocks);
+                    setBits16(&table_entry.rx_count, 15, 15, bl_size);
+
+                    // Set status to VALID so that we can receive packets.
+                    setBits16(ep_reg, 12, 13, 0b11);
+
+                    packet_mem_top += real_size;
+                }
+            }
+        }
+
+        /// Gets the register for the given endpoint address.
+        fn endpointRegister(ep_addr: u3) *align(1) volatile u16 {
+            return switch (ep_addr) {
+                0 => &mcu.usb.ep0r,
+                1 => &mcu.usb.ep1r,
+                2 => &mcu.usb.ep2r,
+                3 => &mcu.usb.ep3r,
+                4 => &mcu.usb.ep4r,
+                5 => &mcu.usb.ep5r,
+                6 => &mcu.usb.ep6r,
+                7 => &mcu.usb.ep7r,
+            };
+        }
+
+        /// BDT == Buffer Descriptor Table
+        const BdtBidirectionalEntry = packed struct {
+            tx_addr: u16,
+            tx_count: u16,
+
+            rx_addr: u16,
+            rx_count: u16,
+        };
+
+        fn getBdtBidirectionalEntry(ep: u3) *volatile BdtBidirectionalEntry {
+            return @intToPtr(
+                *volatile BdtBidirectionalEntry,
+                mcu.usb_packet_memory_offset + @intCast(usize, ep) * @sizeOf(BdtBidirectionalEntry),
+            );
+        }
+
+        /// Copies provided bytes to PBM.
+        /// PBM only supports 8 and 16-bit access, so we need to make sure the compiler doesn't
+        /// try to get fancy and produce word copies.
+        /// 
+        /// This is dest-source order since that's what Zig's mem.copy does.
+        fn copyToPbm(dest_offset: u16, source: []const u8) void {
+            const dest = @intToPtr([*]volatile u8, mcu.usb_packet_memory_offset + @intCast(usize, dest_offset));
+
+            for (source) |source_byte, i| {
+                dest[i] = source_byte;
+            }
+        }
+
+        fn copyFromPbm(dest: []u8, source_offset: u16) void {
+            const source = @intToPtr([*]volatile u8, mcu.usb_packet_memory_offset + @intCast(usize, source_offset));
+
+            for (dest) |*dest_byte, i| {
+                dest_byte.* = source[i];
+            }
+        }
+
+        const State = struct {
+            address: u8 = 0,
+            setup_state: SetupState = .uninitialized,
+            ep0_packet_buffer: [desc.endpoints[0].max_packet_size]u8 = undefined,
+        };
+
+        /// States for the device state setup state machine.
+        const SetupState = enum {
+            /// The host has not sent any SETUP packets yet.
+            uninitialized,
+        };
+
+        var global_state: State = .{};
     };
-
-    var global_state: State = .{};
-};
+}
 
 pub fn delay(comptime f_cpu_hz: comptime_int, comptime delay_us: comptime_int) void {
     // On an m0+, nop takes 1 cycle, and then b.n can take 1 or 2 (the documentation link was broken).
@@ -323,14 +569,12 @@ pub fn delay(comptime f_cpu_hz: comptime_int, comptime delay_us: comptime_int) v
 
     var i: u32 = 0;
     while (i < num_iterations) : (i += 1) {
-        asm volatile (
-            "nop"
-        );
+        asm volatile ("nop");
     }
 }
 
 pub fn InclusiveBitsType(comptime start: comptime_int, comptime end: comptime_int) type {
-    return std.meta.Int(.unsigned, end-start+1);
+    return std.meta.Int(.unsigned, end - start + 1);
 }
 
 // Inclusive on both sides (since that's how the datasheet does it).

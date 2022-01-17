@@ -105,6 +105,8 @@ pub const usb = @intToPtr(*volatile packed struct{
     _reserved15: u16,
 }, 0x4000_5C00);
 
+pub const usb_packet_memory_offset = 0x4000_6000;
+
 pub const Interrupt = enum {
     WWDG,
     PVD,
