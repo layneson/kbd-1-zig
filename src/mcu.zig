@@ -462,7 +462,10 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
                                 }
                             }
 
-                            sendPacket(ep, &configuration_descriptor_buffer);
+                            sendPacket(ep, configuration_descriptor_buffer[0..std.math.min(
+                                @intCast(u16, configuration_descriptor_buffer.len),
+                                setup_packet.wLength,
+                            )]);
                         } else if (
                             setup_packet.bmRequestType == 0b1000_0000 and
                             setup_packet.bRequest == 6 and
