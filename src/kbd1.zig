@@ -2,6 +2,7 @@ const std = @import("std");
 
 const startup = @import("startup.zig");
 const mcu = @import("mcu.zig");
+const usb_std = @import("usb_std.zig");
 
 // Force Zig to evaluate startup so that we get our exports.
 comptime {
@@ -47,13 +48,32 @@ pub fn main() noreturn {
     mcu.delay(16_000_000, 500_000);
     mcu.gpio.clear(.c, 15);
 
+    var counter: u8 = 0;
+
     while (true) {
         switch (usb.poll()) {
             .none => {},
             .reset => {},
             .setup => {},
             .sent => {},
-            .received => {},
+            .received => |ep| {
+                if (ep != 0) continue;
+
+                var recv_buffer: [64]u8 = undefined;
+                const packet_len = usb.getPacketLength(ep);
+                usb.readPacket(ep, recv_buffer[0..packet_len]);
+
+                const setup_packet = @ptrCast(*usb_std.Setup, recv_buffer[0..packet_len]).*;
+
+                if ((setup_packet.bmRequestType & 0b0110_0000) == 0b0100_0000 and setup_packet.bRequest == 2) {
+                    usb.sendPacket(0, &.{});
+                }
+
+                if ((setup_packet.bmRequestType & 0b0110_0000) == 0b0100_0000 and setup_packet.bRequest == 3) {
+                    usb.sendPacket(0, &[_]u8 { counter });
+                    counter += 1;
+                }
+            },
         }
     }
 }

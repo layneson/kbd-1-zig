@@ -416,6 +416,11 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
 
                         const setup_packet = @ptrCast(*const usb_std.Setup, global_state.ep0_packet_buffer[0..packet_len]).*;
 
+                        if ((setup_packet.bmRequestType & 0b0110_0000) != 0) {
+                            // Non-standard. Give to user.
+                            return .{ .received = ep };
+                        }
+
                         if (
                             setup_packet.bmRequestType == 0b1000_0000 and
                             setup_packet.bRequest == 6 and
@@ -443,9 +448,6 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
                             (setup_packet.wValue >> 8) == 2
                         ) {
                             // GET_DESCRIPTOR (configuration).
-
-                            // TODO REMOVE ME
-                            gpio.set(.c, 15);
 
                             var config_writer = std.io.fixedBufferStream(&configuration_descriptor_buffer).writer();
 
@@ -501,16 +503,21 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
 
                                 sendPacket(ep, global_state.ep0_packet_buffer[0..@sizeOf(usb_std.StringDescriptor) + string_utf16_len]);
                             }
-                        } else if (global_state.setup_state == .finished) {
-                            // Some other control packet that we don't need.
-                            // Pass it along to the user.
-                            return .{ .received = ep };
+                        } else if (
+                            setup_packet.bmRequestType == 0b1000_0000 and
+                            setup_packet.bRequest == 0
+                        ) {
+                            // GET_STATUS.
+
+                            const status = [_]u8{ 0, 0 };
+
+                            sendPacket(ep, &status);
                         } else {
                             // We are in setup still, and here's a packet we don't know.
                             // Ignore.
 
                             // Stall on the next IN request, since we don't know what we're being asked for.
-                            // TODO: NEEDED?
+                            // Seems to be needed for packets attempting to switch to high speed.P
                             ep_reg.setStatTx(0b01);
                         }
 
@@ -910,6 +917,10 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
                 if (i % 2 == 1) {
                     dest[i/2] = @intCast(u16, source[i - 1]) | (@intCast(u16, source_byte) << 8);
                 }
+            }
+
+            if (source.len % 2 == 1) {
+                dest[source.len / 2] = (dest[source.len / 2] & 0xFF00) | source[source.len - 1];
             }
         }
 
