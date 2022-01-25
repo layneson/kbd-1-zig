@@ -349,14 +349,65 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
             const result = pollInternal();
 
             switch (result) {
-                .setup => |ep| if (ep == 0 and global_state.device_state != .configured) {
-                    handleInitSetup();
-                    return .{ .none = {} };
-                } else return result,
-                .received => |ep| if (ep == 0 and global_state.device_state != .configured) {
-                    handleInitOut();
-                    return .{ .none = {} };
-                 } else return result,
+                .setup => |ep| {
+                    if (ep != 0) return result;
+                    
+                    if (global_state.device_state != .configured) {
+                        handleInitSetup();
+                        return .{ .none = {} };
+                    }
+
+                    // Could be GET_STATUS.
+
+                    const table_entry = getBdtBidirectionalEntry(0);
+                    const pbm_offset = table_entry.rx_addr;
+
+                    // Count is only 10 bits of the rx_count register.
+                    const packet_len = @intCast(u16, getBits16(table_entry.rx_count, 0, 9));
+
+                    copyFromPbm(global_state.ep0_packet_buffer[0..packet_len], pbm_offset);
+
+                    const setup_packet = @ptrCast(*const usb_std.Setup, global_state.ep0_packet_buffer[0..packet_len]).*;
+                    
+                    if (setup_packet.bmRequestType == 0b1000_0000 and setup_packet.bRequest == 0) {
+                        // GET_STATUS.
+
+                        const status = [_]u8{ 0, 0 };
+                        sendPacket(0, &status);
+
+                        global_state.ep0_in_control_transfer = true;
+
+                        // Set status back to VALID so that another packet can be received.
+                        const ep_reg = endpointRegister(0);
+                        ep_reg.setStatRx(0b11);
+
+                        return .{ .none = {} };
+                    }
+
+                    return result;
+                },
+                .received => |ep| {
+                    if (ep != 0) return result;
+
+                    if (global_state.device_state != .configured) {
+                        handleInitOut();
+                        return .{ .none = {} };
+                    }
+
+                    if (global_state.ep0_in_control_transfer) {
+                        // Waiting for status stage of control transfer that the user is not involved in.
+
+                        global_state.ep0_in_control_transfer = false;
+
+                        // Set status back to VALID so that another packet can be received.
+                        const ep_reg = endpointRegister(0);
+                        ep_reg.setStatRx(0b11);
+
+                        return .{ .none = {} };
+                    }
+
+                    return result;
+                },
                 .sent => |ep| if (ep == 0 and global_state.device_state != .configured) {
                     handleInitIn();
                     return .{ .none = {} };
@@ -965,6 +1016,7 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
             address: u8 = 0,
             device_state: DeviceState = .default,
             should_set_address_on_next_status_stage: bool = false,
+            ep0_in_control_transfer: bool = false,
             ep0_packet_buffer: [desc.endpoints[0].max_packet_size]u8 = undefined,
         };
 
