@@ -342,6 +342,31 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
         };
 
         pub fn poll() PollResult {
+            if (global_state.device_state == .configured) {
+                gpio.set(.c, 15);
+            }
+
+            const result = pollInternal();
+
+            switch (result) {
+                .setup => |ep| if (ep == 0 and global_state.device_state != .configured) {
+                    handleInitSetup();
+                    return .{ .none = {} };
+                } else return result,
+                .received => |ep| if (ep == 0 and global_state.device_state != .configured) {
+                    handleInitOut();
+                    return .{ .none = {} };
+                 } else return result,
+                .sent => |ep| if (ep == 0 and global_state.device_state != .configured) {
+                    handleInitIn();
+                    return .{ .none = {} };
+                } else return result,
+                else => return result,
+            }
+        }
+
+        // This is separated from poll() so that we can intercept STATUS transfers on endpoint 0.
+        fn pollInternal() PollResult {
             // We need to:
             //   (a) Sample ISTR once at the beginning;
             //   (b) Clear the bits we handle.
@@ -368,203 +393,207 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
 
             if (getBits16(istr, 15, 15) == 1) {
                 // CTR. A transaction was completed.
-                // If SETUP, we need to respond automatically with config info.
-                // If OUT, we need to hand the packet over to the user.
-                // If IN, we need to tell the user so they can send another if they so please.
 
                 // The EP_ID field is actually 4 bits ([0, 3]), but we constrain
                 // to the 8 lowest ids since we only have 8 endpoints and we don't need any more.
                 const ep = getBits16(istr, 0, 2);
                 const ep_reg = endpointRegister(ep);
 
-                var process_in: bool = false;
-                var process_out_or_setup: bool = false;
-
                 const direction = getBits16(istr, 4, 4);
                 switch (direction) {
                     0 => {
                         // IN
-                        process_in = true;
+                        
+                        // Clear CTR_TX.
+                        ep_reg.clearCtrTx();
+
+                        return .{ .sent = ep };
                     },
                     1 => {
-                        // OUT or SETUP and possibly IN
+                        // OUT or SETUP and possibly IN (although we won't handle that here).
 
-                        process_out_or_setup = true;
+                        // Clear CTR_RX.
+                        // Datasheet wants us to do this before reading the packet.
+                        ep_reg.clearCtrRx();
 
-                        if (ep_reg.getCtrTx() == 1) {
-                            // Also IN
-                            process_in = true;
+                        if (ep_reg.getSetup() == 1) {
+                            // SETUP.
+                            return .{ .setup = ep };
                         }
+
+                        return .{ .received = ep };
                     },
                 }
-
-                if (process_out_or_setup) {
-                    // Clear CTR_RX.
-                    // Datasheet wants us to do this before reading the packet.
-                    ep_reg.clearCtrRx();
-
-                    if (ep == 0 and ep_reg.getSetup() == 1) {
-                        // It is SETUP, not OUT!
-
-                        const table_entry = getBdtBidirectionalEntry(ep);
-                        const pbm_offset = table_entry.rx_addr;
-
-                        // Count is only 10 bits of the rx_count register.
-                        const packet_len = @intCast(u16, getBits16(table_entry.rx_count, 0, 9));
-
-                        copyFromPbm(global_state.ep0_packet_buffer[0..packet_len], pbm_offset);
-
-                        const setup_packet = @ptrCast(*const usb_std.Setup, global_state.ep0_packet_buffer[0..packet_len]).*;
-
-                        if ((setup_packet.bmRequestType & 0b0110_0000) != 0) {
-                            // Non-standard. Give to user.
-                            return .{ .received = ep };
-                        }
-
-                        if (
-                            setup_packet.bmRequestType == 0b1000_0000 and
-                            setup_packet.bRequest == 6 and
-                            (setup_packet.wValue >> 8) == 1
-                        ) {
-                            // GET_DESCRIPTOR (device).
-                            // Reply with device descriptor.
-
-                            const device_descriptor = buildDeviceDescriptor();
-
-                            global_state.setup_state = .setup;
-                            
-                            sendPacket(ep, &std.mem.toBytes(device_descriptor));
-                        } else if (
-                            setup_packet.bmRequestType == 0 and
-                            setup_packet.bRequest == 5
-                        ) {                
-                            global_state.setup_state = .addressed;
-                            global_state.address = @intCast(u8, setup_packet.wValue);
-                            
-                            sendPacket(ep, &.{});
-                        } else if (
-                            setup_packet.bmRequestType == 0b1000_0000 and
-                            setup_packet.bRequest == 6 and
-                            (setup_packet.wValue >> 8) == 2
-                        ) {
-                            // GET_DESCRIPTOR (configuration).
-
-                            var config_writer = std.io.fixedBufferStream(&configuration_descriptor_buffer).writer();
-
-                            const configuration_descriptor = buildConfigurationDescriptor();
-                            config_writer.writeAll(&std.mem.toBytes(configuration_descriptor)) catch {};
-                            
-                            for (desc.interfaces) |iface, i| {
-                                const interface_descriptor = buildInterfaceDescriptor(i);
-                                config_writer.writeAll(&std.mem.toBytes(interface_descriptor)) catch {};
-
-                                for (iface.endpoint_ids) |iface_ep_idx| {
-                                    const endpoint_descriptor = buildEndpointDescriptor(iface_ep_idx);
-                                    config_writer.writeAll(&std.mem.toBytes(endpoint_descriptor)) catch {};
-                                }
-                            }
-
-                            sendPacket(ep, configuration_descriptor_buffer[0..std.math.min(
-                                @intCast(u16, configuration_descriptor_buffer.len),
-                                setup_packet.wLength,
-                            )]);
-                        } else if (
-                            setup_packet.bmRequestType == 0b1000_0000 and
-                            setup_packet.bRequest == 6 and
-                            (setup_packet.wValue >> 8) == 3
-                        ) {
-                            // GET_DESCRIPTOR (string).
-
-                            const descriptor_idx = @intCast(u8, setup_packet.wValue);
-
-                            if (descriptor_idx == 0) {
-                                // Wants a language descriptor thingy.
-
-                                const language_descriptor_bytes = [_]u8{ 4, 3, 0x09, 0x04 };
-                                sendPacket(ep, &language_descriptor_bytes);
-                            } else {
-                                const string_idx = descriptor_idx - 1;
-
-                                var descriptor_writer = std.io.fixedBufferStream(&global_state.ep0_packet_buffer).writer();
-
-                                const string_utf16_len = @intCast(u8, desc.string_descriptors[string_idx].len) * 2;
-
-                                const string_descriptor: usb_std.StringDescriptor = .{
-                                    .bLength = @sizeOf(usb_std.StringDescriptor) + string_utf16_len,
-                                    .bDescriptorType = 3, // STRING
-                                };
-
-                                descriptor_writer.writeAll(&std.mem.toBytes(string_descriptor)) catch {};
-
-                                for (desc.string_descriptors[string_idx]) |char| {
-                                    descriptor_writer.writeByte(char) catch {};
-                                    descriptor_writer.writeByte(0) catch {};
-                                }
-
-                                sendPacket(ep, global_state.ep0_packet_buffer[0..@sizeOf(usb_std.StringDescriptor) + string_utf16_len]);
-                            }
-                        } else if (
-                            setup_packet.bmRequestType == 0b1000_0000 and
-                            setup_packet.bRequest == 0
-                        ) {
-                            // GET_STATUS.
-
-                            const status = [_]u8{ 0, 0 };
-
-                            sendPacket(ep, &status);
-                        } else {
-                            // We are in setup still, and here's a packet we don't know.
-                            // Ignore.
-
-                            // Stall on the next IN request, since we don't know what we're being asked for.
-                            // Seems to be needed for packets attempting to switch to high speed.P
-                            ep_reg.setStatTx(0b01);
-                        }
-
-                        // We are finished processing.
-                        // Set status back to VALID so that another packet can be received.
-                        ep_reg.setStatRx(0b11);
-
-                        return .{ .setup = ep };
-                    } else {
-                        if (ep == 0 and global_state.setup_state == .setup or global_state.setup_state == .addressed) {
-                            // Ignore.
-                            // Set status back to VALID so that another packet can be received.
-                            ep_reg.setStatRx(0b11);
-
-                            return .{ .none = {} };
-                        } else {
-                            return .{ .received = ep };
-                        }
-                    }
-
-                    
-                }
-
-                if (process_in) {
-                    // Clear CTR_TX.
-                    ep_reg.clearCtrTx();                   
-
-                    if (ep == 0 and global_state.setup_state != .finished) {
-                        if (global_state.setup_state == .addressed) {
-                            // SET_ADDRESS.
-                            setBits16(&mcu.usb.daddr, 0, 6, @intCast(u7, global_state.address));
-                        }
-
-                        // We've handled this.
-                        // Set status to VALID so that we can send more.
-                        ep_reg.setStatTx(0b11);
-
-                        // Don't notify.
-                        return .{ .none = {} };
-                    } else {
-                        return .{ .sent = ep };
-                    }
-                }
-
             }
 
             return .{ .none = {} };
+        }
+
+        /// Called internally when the device is not yet configured and a SETUP packet
+        /// has been received to endpoint 0.
+        fn handleInitSetup() void {
+            const ep_reg = endpointRegister(0);
+
+            const table_entry = getBdtBidirectionalEntry(0);
+            const pbm_offset = table_entry.rx_addr;
+
+            // Count is only 10 bits of the rx_count register.
+            const packet_len = @intCast(u16, getBits16(table_entry.rx_count, 0, 9));
+
+            copyFromPbm(global_state.ep0_packet_buffer[0..packet_len], pbm_offset);
+
+            const setup_packet = @ptrCast(*const usb_std.Setup, global_state.ep0_packet_buffer[0..packet_len]).*;
+
+            // We may have disabled responding to IN requests in another life due to an unexpected packet.
+            // Let's go back to the default (NAK).
+            ep_reg.setStatTx(0b10);
+
+            if (
+                setup_packet.bmRequestType == 0b1000_0000 and
+                setup_packet.bRequest == 6 and
+                (setup_packet.wValue >> 8) == 1
+            ) {
+                // GET_DESCRIPTOR (device).
+                // Reply with device descriptor.
+
+                const device_descriptor_bytes = std.mem.toBytes(buildDeviceDescriptor());
+                
+                sendPacket(0, device_descriptor_bytes[0..std.math.min(device_descriptor_bytes.len, setup_packet.wLength)]);
+            } else if (
+                setup_packet.bmRequestType == 0 and
+                setup_packet.bRequest == 5
+            ) {
+                // SET_ADDRESS.
+
+                global_state.address = @intCast(u8, setup_packet.wValue);
+                
+                // Status stage.
+                sendPacket(0, &.{});
+
+                global_state.should_set_address_on_next_status_stage = true;
+            } else if (
+                setup_packet.bmRequestType == 0b1000_0000 and
+                setup_packet.bRequest == 6 and
+                (setup_packet.wValue >> 8) == 2
+            ) {
+                // GET_DESCRIPTOR (configuration).
+
+                var config_writer = std.io.fixedBufferStream(&configuration_descriptor_buffer).writer();
+
+                const configuration_descriptor = buildConfigurationDescriptor();
+                config_writer.writeAll(&std.mem.toBytes(configuration_descriptor)) catch {};
+                
+                for (desc.interfaces) |iface, i| {
+                    const interface_descriptor = buildInterfaceDescriptor(i);
+                    config_writer.writeAll(&std.mem.toBytes(interface_descriptor)) catch {};
+
+                    for (iface.endpoint_ids) |iface_ep_idx| {
+                        const endpoint_descriptor = buildEndpointDescriptor(iface_ep_idx);
+                        config_writer.writeAll(&std.mem.toBytes(endpoint_descriptor)) catch {};
+                    }
+                }
+
+                sendPacket(0, configuration_descriptor_buffer[0..std.math.min(
+                    @intCast(u16, configuration_descriptor_buffer.len),
+                    setup_packet.wLength,
+                )]);
+            } else if (
+                setup_packet.bmRequestType == 0b1000_0000 and
+                setup_packet.bRequest == 6 and
+                (setup_packet.wValue >> 8) == 3
+            ) {
+                // GET_DESCRIPTOR (string).
+
+                const descriptor_idx = @intCast(u8, setup_packet.wValue);
+
+                if (descriptor_idx == 0) {
+                    // Wants a language descriptor thingy.
+
+                    const language_descriptor_bytes = [_]u8{ 4, 3, 0x09, 0x04 };
+                    sendPacket(0, &language_descriptor_bytes);
+                } else {
+                    const string_idx = descriptor_idx - 1;
+
+                    var descriptor_writer = std.io.fixedBufferStream(&global_state.ep0_packet_buffer).writer();
+
+                    const string_utf16_len = @intCast(u8, desc.string_descriptors[string_idx].len) * 2;
+
+                    const string_descriptor: usb_std.StringDescriptor = .{
+                        .bLength = @sizeOf(usb_std.StringDescriptor) + string_utf16_len,
+                        .bDescriptorType = 3, // STRING
+                    };
+
+                    descriptor_writer.writeAll(&std.mem.toBytes(string_descriptor)) catch {};
+
+                    for (desc.string_descriptors[string_idx]) |char| {
+                        descriptor_writer.writeByte(char) catch {};
+                        descriptor_writer.writeByte(0) catch {};
+                    }
+
+                    sendPacket(0, global_state.ep0_packet_buffer[0..std.math.min(
+                        @sizeOf(usb_std.StringDescriptor) + string_utf16_len,
+                        setup_packet.wLength,
+                    )]);
+                }
+            } else if (
+                setup_packet.bmRequestType == 0b1000_0000 and
+                setup_packet.bRequest == 0
+            ) {
+                // GET_STATUS.
+
+                const status = [_]u8{ 0, 0 };
+
+                sendPacket(0, &status);
+            } else if (
+                setup_packet.bmRequestType == 0b0000_0000 and
+                setup_packet.bRequest == 9
+            ) {
+                // SET_CONFIGURATION.
+
+                // Status stage.
+                sendPacket(0, &.{});
+
+                global_state.device_state = .configured;
+            } else {
+                // We are in setup still, and here's a packet we don't know.
+                // Ignore.
+
+                // Disable responding to IN requests because we don't know what this is...
+                ep_reg.setStatTx(0b01);
+            }
+
+            // We are finished processing.
+            // Set status back to VALID so that another packet can be received.
+            ep_reg.setStatRx(0b11);
+        }
+
+        fn handleInitOut() void {
+            const ep_reg = endpointRegister(0);
+
+            // AFAIK, during our init dance, we don't ever have an OUT data stage (relevant host-to-device
+            // data is contained within the STATUS packet).
+
+            // Set status back to VALID so that another packet can be received.
+            ep_reg.setStatRx(0b11);
+        }
+
+        fn handleInitIn() void {
+            //const ep_reg = endpointRegister(0);
+
+            // Success! If we got confirmation of IN, we just sent some data
+            // and were waiting on confirmation. Let's finish that wait.
+
+            // However, if we were waiting on confirmation of sending the status
+            // stage of a control transfer that just set our address, we need to
+            // finish the job.
+            if (global_state.should_set_address_on_next_status_stage) {
+                global_state.should_set_address_on_next_status_stage = false;
+
+                // SET_ADDRESS.
+                setBits16(&mcu.usb.daddr, 0, 6, @intCast(u7, global_state.address));
+
+                global_state.device_state = .address;
+            }
         }
 
         fn buildDeviceDescriptor() usb_std.DeviceDescriptor {
@@ -934,22 +963,22 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
 
         const State = struct {
             address: u8 = 0,
-            /// If true for ep 0, the last packet sent was not from the user (internal, i.e. in response to SETUP),
-            /// so we shouldn't notify the user of successful sending.
-            setup_state: SetupState = .uninitialized,
+            device_state: DeviceState = .default,
+            should_set_address_on_next_status_stage: bool = false,
             ep0_packet_buffer: [desc.endpoints[0].max_packet_size]u8 = undefined,
         };
 
         /// States for the device state setup state machine.
-        const SetupState = enum {
-            /// The host has not sent any SETUP packets yet.
-            uninitialized,
-            /// Initial endpoint-0 setup.
-            setup,
-            /// We have a non-zero address now.
-            addressed,
-            /// Fully set up.
-            finished,
+        /// These are taken from the usb 2.0 spec.
+        /// We don't include powered here because there is no difference between
+        /// the powered and default states from our perspective.
+        const DeviceState = enum {
+            /// Device has been reset (or not, see note above) but not assigned an address.
+            default,
+            /// Device has an address but has not been configured.
+            address,
+            /// Device has been configured. Normal operation.
+            configured,
         };
 
         var global_state: State = .{};
