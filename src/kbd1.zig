@@ -23,14 +23,11 @@ pub fn main() noreturn {
     mcu.rcc.enablePeripheralClock(.syscfg);
     mcu.rcc.enablePeripheralClock(.crs);
 
-    // LED
-    mcu.gpio.setMode(.c, 15, .output);
-
     // UART
-    mcu.gpio.setMode(.b, 6, .alternate); // TX
-    mcu.gpio.setAlternateFunction(.b, 6, 0);
-    mcu.usart.init(.usart1, 16_000_000, 576000);
-    mcu.usart.start(.usart1, .{ .transmit = true });
+    // mcu.gpio.setMode(.b, 6, .alternate); // TX
+    // mcu.gpio.setAlternateFunction(.b, 6, 0);
+    // mcu.usart.init(.usart1, 16_000_000, 576000);
+    // mcu.usart.start(.usart1, .{ .transmit = true });
 
     // USB SETUP
 
@@ -44,9 +41,7 @@ pub fn main() noreturn {
 
     usb.init();
 
-    mcu.gpio.set(.c, 15);
-    mcu.delay(16_000_000, 500_000);
-    mcu.gpio.clear(.c, 15);
+    std.log.info("Starting loop.", .{});
 
     var counter: u8 = 0;
 
@@ -136,7 +131,8 @@ pub fn log(
     const scope_name = @tagName(scope);
     const scope_prefix = if (scope == .default) "" else "(" ++ scope_name ++ ") ";
 
-    mcu.usart.writer(.usart1).print(level_prefix ++ scope_prefix ++ format ++ "\n", args) catch {};
+    // mcu.usart.writer(.usart1).print(level_prefix ++ scope_prefix ++ format ++ "\n", args) catch {};
+    mcu.semihosting.print(level_prefix ++ scope_prefix ++ format ++ "\n", args);
 }
 
 pub const log_level = .debug;

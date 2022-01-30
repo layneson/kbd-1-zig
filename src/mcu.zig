@@ -342,10 +342,6 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
         };
 
         pub fn poll() PollResult {
-            if (global_state.device_state == .configured) {
-                gpio.set(.c, 15);
-            }
-
             const result = pollInternal();
 
             switch (result) {
@@ -1150,3 +1146,29 @@ pub fn getBitsRuntime16(
     const mask = (@as(u16, 1) << mask_bits) - 1;
     return (reg_value & (mask << start)) >> start;
 }
+
+pub const semihosting = struct {
+    pub fn print(comptime fmt: []const u8, args: anytype) void {
+        var writer = std.io.Writer(void, PrintRawError, printRaw){ .context = {} };
+        writer.print(fmt, args) catch {};
+    }
+
+    const PrintRawError = error{};
+
+    fn printRaw(_: void, str: []const u8) PrintRawError!usize {
+        const sys_write_args = [3]u32 {
+            @as(u32, 2), // Stderr.
+            @ptrToInt(str.ptr),
+            str.len,
+        };
+
+        asm volatile ("BKPT 0xAB"
+            :
+            : [sh_op_type] "{R0}" (@as(u32, 0x05)),
+              [sys_write_args] "{R1}" (@ptrToInt(&sys_write_args))
+            :
+        );
+
+        return str.len;
+    }
+};
