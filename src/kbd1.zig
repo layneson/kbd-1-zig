@@ -49,9 +49,7 @@ pub fn main() noreturn {
         switch (usb.poll()) {
             .none => {},
             .reset => {},
-            .setup => {},
-            .sent => {},
-            .received => |ep| {
+            .setup => |ep| {
                 if (ep != 0) continue;
 
                 var recv_buffer: [64]u8 = undefined;
@@ -69,6 +67,8 @@ pub fn main() noreturn {
                     counter += 1;
                 }
             },
+            .sent => {},
+            .received => {},
         }
     }
 }
