@@ -9,8 +9,10 @@ pub const Setup = packed struct {
 };
 
 pub const DeviceDescriptor = packed struct {
-    bLength: u8,
-    bDescriptorType: u8,
+    pub const DescriptorType: u8 = 1;
+
+    bLength: u8 = @sizeOf(DeviceDescriptor),
+    bDescriptorType: u8 = DescriptorType,
     bcdUSB: u16,
     bDeviceClass: u8,
     bDeviceSubClass: u8,
@@ -26,8 +28,10 @@ pub const DeviceDescriptor = packed struct {
 };
 
 pub const ConfigurationDescriptor = packed struct {
-    bLength: u8,
-    bDescriptorType: u8,
+    pub const DescriptorType: u8 = 2;
+
+    bLength: u8 = @sizeOf(ConfigurationDescriptor),
+    bDescriptorType: u8 = DescriptorType,
     wTotalLength: u16,
     bNumInterfaces: u8,
     bConfigurationValue: u8,
@@ -37,20 +41,24 @@ pub const ConfigurationDescriptor = packed struct {
 };
 
 pub const InterfaceDescriptor = packed struct {
-    bLength: u8,
-    bDescriptorType: u8,
+    pub const DescriptorType: u8 = 4;
+
+    bLength: u8 = @sizeOf(InterfaceDescriptor),
+    bDescriptorType: u8 = DescriptorType,
     bInterfaceNumber: u8,
     bAlternateSetting: u8,
     bNumEndpoints: u8,
     bInterfaceClass: u8,
-    bInterfaceSubclass: u8,
+    bInterfaceSubClass: u8,
     bInterfaceProtocol: u8,
     iInterface: u8,
 };
 
 pub const EndpointDescriptor = packed struct {
-    bLength: u8,
-    bDescriptorType: u8,
+    pub const DescriptorType: u8 = 5;
+
+    bLength: u8 = @sizeOf(EndpointDescriptor),
+    bDescriptorType: u8 = DescriptorType,
     bEndpointAddress: u8,
     bmAttributes: u8,
     wMaxPacketSize: u16,
@@ -58,6 +66,8 @@ pub const EndpointDescriptor = packed struct {
 };
 
 pub const StringDescriptor = packed struct {
+    pub const DescriptorType: u8 = 3;
+
     bLength: u8,
-    bDescriptorType: u8,
+    bDescriptorType: u8 = DescriptorType,
 };

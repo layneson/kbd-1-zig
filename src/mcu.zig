@@ -269,57 +269,34 @@ pub const crs = struct {
     }
 };
 
-pub const UsbDeviceDescription = struct {
-    class: u8,
-    subclass: u8,
-    protocol: u8,
-    vendor_id: u16,
-    product_id: u16,
-    manufacturer_descriptor_idx: u8,
-    product_descriptor_idx: u8,
-    serial_number_descriptor_idx: u8,
-
-    endpoints: []const Endpoint,
-
-    interfaces: []const Interface,
-
-    string_descriptors: []const []const u8,
-
-    pub const Endpoint = struct {
-        ep_type: EndpointType,
-        direction: struct { in: bool, out: bool },
-        max_packet_size: u16,
-        /// In number of frames (1ms for full-speed).
-        /// Ignored for endpoint 0.
-        poll_interval: u8,
-    };
-
-    pub const EndpointType = enum {
+pub const UsbEndpointInfo = struct {
+    address: u3,
+    ep_type: enum {
         control,
         isochronous,
         bulk,
         interrupt,
-    };
-
-    pub const Interface = struct {
-        /// Doesn't include endpoint 0.
-        endpoint_ids: []u8,
-        class: u8,
-        subclass: u8,
-        protocol: u8,
-        interface_descriptor_idx: u8,
-    };
+    },
+    direction: enum {
+        in,
+        out,
+        control,
+    },
+    max_packet_size: u16,
 };
 
-pub fn usb(comptime desc: UsbDeviceDescription) type {
+/// - configuration_descriptor: A packed struct of the entire
+///   configuration descriptor (including all other descriptors).
+///   
+///   The first member must be of type usb_std.ConfigurationDescriptor.
+///   Its wTotalLength should be set appropriately.
+pub fn usb(
+    comptime device_descriptor: usb_std.DeviceDescriptor,
+    comptime configuration_descriptor: anytype,
+    comptime string_descriptors: []const []const u8,
+    comptime endpoint_info: []UsbEndpointInfo,
+) type {
     return struct {
-        comptime {
-            // Just want to check desc.
-
-            if (desc.endpoints.len == 0) @compileError("endpoint 0 is required");
-            if (!desc.endpoints[0].direction.in or !desc.endpoints[0].direction.out) @compileError("endpoint 0 must be bi-directional");
-        }
-
         pub fn init() void {
             mcu.usb.cntr = 0;
             mcu.usb.btable = 0;
@@ -503,7 +480,7 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
                 // GET_DESCRIPTOR (device).
                 // Reply with device descriptor.
 
-                const device_descriptor_bytes = std.mem.toBytes(buildDeviceDescriptor());
+                const device_descriptor_bytes = std.mem.toBytes(device_descriptor);
                 
                 sendPacket(0, device_descriptor_bytes[0..std.math.min(device_descriptor_bytes.len, setup_packet.wLength)]);
             } else if (
@@ -525,23 +502,10 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
             ) {
                 // GET_DESCRIPTOR (configuration).
 
-                var config_writer = std.io.fixedBufferStream(&configuration_descriptor_buffer).writer();
+                var configuration_descriptor_bytes = std.mem.toBytes(configuration_descriptor);
 
-                const configuration_descriptor = buildConfigurationDescriptor();
-                config_writer.writeAll(&std.mem.toBytes(configuration_descriptor)) catch {};
-                
-                for (desc.interfaces) |iface, i| {
-                    const interface_descriptor = buildInterfaceDescriptor(i);
-                    config_writer.writeAll(&std.mem.toBytes(interface_descriptor)) catch {};
-
-                    for (iface.endpoint_ids) |iface_ep_idx| {
-                        const endpoint_descriptor = buildEndpointDescriptor(iface_ep_idx);
-                        config_writer.writeAll(&std.mem.toBytes(endpoint_descriptor)) catch {};
-                    }
-                }
-
-                sendPacket(0, configuration_descriptor_buffer[0..std.math.min(
-                    @intCast(u16, configuration_descriptor_buffer.len),
+                sendPacket(0, configuration_descriptor_bytes[0..std.math.min(
+                    @intCast(u16, configuration_descriptor_bytes.len),
                     setup_packet.wLength,
                 )]);
             } else if (
@@ -563,7 +527,7 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
 
                     var descriptor_writer = std.io.fixedBufferStream(&global_state.ep0_packet_buffer).writer();
 
-                    const string_utf16_len = @intCast(u8, desc.string_descriptors[string_idx].len) * 2;
+                    const string_utf16_len = @intCast(u8, string_descriptors[string_idx].len) * 2;
 
                     const string_descriptor: usb_std.StringDescriptor = .{
                         .bLength = @sizeOf(usb_std.StringDescriptor) + string_utf16_len,
@@ -572,7 +536,7 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
 
                     descriptor_writer.writeAll(&std.mem.toBytes(string_descriptor)) catch {};
 
-                    for (desc.string_descriptors[string_idx]) |char| {
+                    for (string_descriptors[string_idx]) |char| {
                         descriptor_writer.writeByte(char) catch {};
                         descriptor_writer.writeByte(0) catch {};
                     }
@@ -643,79 +607,6 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
             }
         }
 
-        fn buildDeviceDescriptor() usb_std.DeviceDescriptor {
-            return .{
-                .bLength = @sizeOf(usb_std.DeviceDescriptor),
-                .bDescriptorType = 1, // DEVICE
-                .bcdUSB = 0x0200,
-                .bDeviceClass = desc.class,
-                .bDeviceSubClass = desc.subclass,
-                .bDeviceProtocol = desc.protocol,
-                .bMaxPacketSize0 = @intCast(u8, desc.endpoints[0].max_packet_size),
-                .idVendor = desc.vendor_id,
-                .idProduct = desc.product_id,
-                .bcdDevice = 0x0100,
-                .iManufacturer = desc.manufacturer_descriptor_idx,
-                .iProduct = desc.product_descriptor_idx,
-                .iSerialNumber = desc.serial_number_descriptor_idx,
-                .bNumConfigurations = 1, // Hardcode this since we won't need anything more.
-            };
-        }
-
-        fn buildConfigurationDescriptor() usb_std.ConfigurationDescriptor {
-            return .{
-                .bLength = @sizeOf(usb_std.ConfigurationDescriptor),
-                .bDescriptorType = 2, // CONFIGURATION
-                .wTotalLength = calculateTotalDescriptorLength(),
-                .bNumInterfaces = @intCast(u8, desc.interfaces.len),
-                .bConfigurationValue = 1,
-                .iConfiguration = 0,
-                .bmAttributes = 0x80,
-                .bMaxPower = 0x50, // 120 mA
-            };
-        }
-
-        fn buildInterfaceDescriptor(iface_idx: usize) usb_std.InterfaceDescriptor {
-            return .{
-                .bLength = @sizeOf(usb_std.InterfaceDescriptor),
-                .bDescriptorType = 4, // INTERFACE
-                .bInterfaceNumber = @intCast(u8, iface_idx),
-                .bAlternateSetting = 0,
-                .bNumEndpoints = @intCast(u8, desc.interfaces[iface_idx].endpoint_ids.len),
-                .bInterfaceClass = desc.interfaces[iface_idx].class,
-                .bInterfaceSubclass = desc.interfaces[iface_idx].subclass,
-                .bInterfaceProtocol = desc.interfaces[iface_idx].protocol,
-                .iInterface = desc.interfaces[iface_idx].interface_descriptor_idx,
-            };
-        }
-
-        fn buildEndpointDescriptor(endpoint_idx: usize) usb_std.EndpointDescriptor {
-            return .{
-                .bLength = @sizeOf(usb_std.EndpointDescriptor),
-                .bDescriptorType = 5, // ENDPOINT
-                .bEndpointAddress = @as(u8, if (desc.endpoints[endpoint_idx].direction.in) 0x80 else 0x00) | @intCast(u8, endpoint_idx),
-                .bmAttributes = switch (desc.endpoints[endpoint_idx].ep_type) {
-                    .control => 0b00,
-                    .isochronous => 0b01,
-                    .bulk => 0b10,
-                    .interrupt => 0b11,
-                },
-                .wMaxPacketSize = desc.endpoints[endpoint_idx].max_packet_size,
-                .bInterval = desc.endpoints[endpoint_idx].poll_interval,
-            };
-        }
-
-        fn calculateTotalDescriptorLength() u16 {
-            comptime var sum: u16 = @sizeOf(usb_std.ConfigurationDescriptor);
-
-            inline for (desc.interfaces) |iface| {
-                sum += @sizeOf(usb_std.InterfaceDescriptor);
-                sum += @intCast(u16, iface.endpoint_ids.len) * @sizeOf(usb_std.EndpointDescriptor);
-            }
-            
-            return sum;
-        }
-
         /// This must be called upon reset.
         fn setupEndpoints() void {
             // Set up endpoints.
@@ -723,12 +614,21 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
             // Buffer descriptor table is 4 entries, 2 bytes each, for 8 total endpoints.
             comptime var packet_mem_top: u16 = 8 * 4 * 2;
 
-            inline for (desc.endpoints) |ep, ep_idx| {
+            const endpoint_info_including_ep0 = &[1]UsbEndpointInfo{
+                .{
+                    .address = 0,
+                    .ep_type = .control,
+                    .direction = .control,
+                    .max_packet_size = device_descriptor.bMaxPacketSize0,
+                },
+            } ++ endpoint_info;
+
+            inline for (endpoint_info_including_ep0) |ep| {
                 // Packet buffer accesses must be 2-byte aligned.
                 // Thus, the max packet size must be even. If it were odd, we might start a packet buffer on an odd offset, which is not allowed.
                 if (ep.max_packet_size & 0b1 != 0) @compileError("endpoints must have even max_packet_size");
 
-                const ep_addr = @intCast(u3, ep_idx);
+                const ep_addr = ep.address;
 
                 const ep_reg = endpointRegister(ep_addr);
 
@@ -749,7 +649,7 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
                 table_entry.tx_count = 0;
                 table_entry.rx_count = 0;
 
-                if (ep.direction.in or ep_addr == 0) {
+                if (ep.direction == .in or ep.direction == .control) {
                     table_entry.tx_addr = packet_mem_top;
 
                     // Set data toggle so that first packet is DATA0.
@@ -762,7 +662,7 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
                     packet_mem_top += ep.max_packet_size;
                 }
 
-                if (ep.direction.out or ep_addr == 0) {
+                if (ep.direction == .out or ep.direction == .control) {
                     table_entry.rx_addr = packet_mem_top;
 
                     // Set data toggle so that first packet is DATA0.
@@ -1013,7 +913,7 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
             device_state: DeviceState = .default,
             should_set_address_on_next_status_stage: bool = false,
             ep0_in_control_transfer: bool = false,
-            ep0_packet_buffer: [desc.endpoints[0].max_packet_size]u8 = undefined,
+            ep0_packet_buffer: [device_descriptor.bMaxPacketSize0]u8 = undefined,
         };
 
         /// States for the device state setup state machine.
@@ -1030,7 +930,6 @@ pub fn usb(comptime desc: UsbDeviceDescription) type {
         };
 
         var global_state: State = .{};
-        var configuration_descriptor_buffer: [calculateTotalDescriptorLength()]u8 = undefined;
     };
 }
 
