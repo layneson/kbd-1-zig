@@ -324,40 +324,8 @@ pub fn usb(
             switch (result) {
                 .setup => |ep| {
                     if (ep != 0) return result;
-                    
-                    if (global_state.device_state != .configured) {
-                        handleInitSetup();
-                        return .{ .none = {} };
-                    }
 
-                    // Could be GET_STATUS.
-
-                    const table_entry = getBdtBidirectionalEntry(0);
-                    const pbm_offset = table_entry.rx_addr;
-
-                    // Count is only 10 bits of the rx_count register.
-                    const packet_len = @intCast(u16, getBits16(table_entry.rx_count, 0, 9));
-
-                    copyFromPbm(global_state.ep0_packet_buffer[0..packet_len], pbm_offset);
-
-                    const setup_packet = @ptrCast(*const usb_std.Setup, global_state.ep0_packet_buffer[0..packet_len]).*;
-                    
-                    if (setup_packet.bmRequestType == 0b1000_0000 and setup_packet.bRequest == 0) {
-                        // GET_STATUS.
-
-                        const status = [_]u8{ 0, 0 };
-                        sendPacket(0, &status);
-
-                        global_state.ep0_in_control_transfer = true;
-
-                        // Set status back to VALID so that another packet can be received.
-                        const ep_reg = endpointRegister(0);
-                        ep_reg.setStatRx(0b11);
-
-                        return .{ .none = {} };
-                    }
-
-                    return result;
+                    return handleSetup();
                 },
                 .received => |ep| {
                     if (ep != 0) return result;
@@ -453,10 +421,17 @@ pub fn usb(
             return .{ .none = {} };
         }
 
-        /// Called internally when the device is not yet configured and a SETUP packet
-        /// has been received to endpoint 0.
-        fn handleInitSetup() void {
+        /// Called internally when a SETUP packet has been received to endpoint 0.
+        /// If it is not recognized as one which needs to be handled by this driver,
+        /// it is returned to the user.
+        fn handleSetup() PollResult {
             const ep_reg = endpointRegister(0);
+            
+            defer {
+                // We are finished processing.
+                // Set status back to VALID so that another packet can be received.
+                ep_reg.setStatRx(0b11);
+            }
 
             const table_entry = getBdtBidirectionalEntry(0);
             const pbm_offset = table_entry.rx_addr;
@@ -566,16 +541,14 @@ pub fn usb(
 
                 global_state.device_state = .configured;
             } else {
-                // We are in setup still, and here's a packet we don't know.
-                // Ignore.
-
+                // TODO: Do we need to do this now?
                 // Disable responding to IN requests because we don't know what this is...
-                ep_reg.setStatTx(0b01);
+                // ep_reg.setStatTx(0b01);
+
+                return .{ .setup = 0 };
             }
 
-            // We are finished processing.
-            // Set status back to VALID so that another packet can be received.
-            ep_reg.setStatRx(0b11);
+            return .{ .none = {} };
         }
 
         fn handleInitOut() void {

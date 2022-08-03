@@ -76,6 +76,11 @@ pub fn main() noreturn {
 const OurUsbConfigurationDescriptor = packed struct {
     configuration_descriptor: usb_std.ConfigurationDescriptor,
     vendor_interface: usb_std.InterfaceDescriptor,
+
+    hid_interface: usb_std.InterfaceDescriptor,
+    hid_descriptor: usb_std.HidDescriptor,
+    hid_descriptor_report_instance: usb_std.HidDescriptorReportInstance, // The actual report descriptor is not included here.
+    hid_endpoint: usb_std.EndpointDescriptor,
 };
 
 const usb = mcu.usb(
@@ -111,12 +116,23 @@ const usb = mcu.usb(
             .bInterfaceProtocol = 0,
             .iInterface = 4,
         },
+        
+        .hid_interface = .{
+            .bInterfaceNumber = 1,
+            .bAlternateSetting = 0,
+            .bNumEndpoints = 1,
+            .bInterfaceClass = 3, // HID
+            .bInterfaceSubClass = 0,
+            .bInterfaceProtocol = 0,
+            .iInterface = 5,
+        },
     },
     &.{
-        "Ting",
-        "SuperTestThingy",
-        "SN0001",
-        "Vendor Thingy",
+        "Ting",             // 1
+        "SuperTestThingy",  // 2
+        "SN0001",           // 3
+        "Vendor Thingy",    // 4
+        "StupidKeyboard",   // 5
     },
     &.{},
 );

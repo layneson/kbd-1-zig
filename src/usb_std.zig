@@ -71,3 +71,22 @@ pub const StringDescriptor = packed struct {
     bLength: u8,
     bDescriptorType: u8 = DescriptorType,
 };
+
+pub const HidDescriptor = packed struct {
+    pub const DescriptorType: u8 = 0x21;
+
+    bLength: u8,
+    bDescriptorType: u8 = DescriptorType,
+    bcdHID: u16, // Should probaby be 0x0101
+    bCountryCode: u8, // 33 is US
+    bNumDescriptors: u8,
+};
+
+/// Indicates the existence of a report descriptor.
+/// These should be included immediately following an HidDescriptor.
+pub const HidDescriptorReportInstance = packed struct {
+    pub const DescriptorType: u8 = 0x22;
+
+    bDescriptorType: u8 = DescriptorType,
+    wDescriptorLength: u16,
+};
