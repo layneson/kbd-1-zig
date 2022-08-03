@@ -60,11 +60,15 @@ pub fn main() noreturn {
 
                 if ((setup_packet.bmRequestType & 0b0110_0000) == 0b0100_0000 and setup_packet.bRequest == 2) {
                     usb.sendPacket(0, &.{});
-                }
-
-                if ((setup_packet.bmRequestType & 0b0110_0000) == 0b0100_0000 and setup_packet.bRequest == 3) {
+                } else if ((setup_packet.bmRequestType & 0b0110_0000) == 0b0100_0000 and setup_packet.bRequest == 3) {
                     usb.sendPacket(0, &[_]u8 { counter });
                     counter += 1;
+                } else {
+                    std.log.info("setup: reqtype={x} request={x} value_top={x}", .{
+                        setup_packet.bmRequestType,
+                        setup_packet.bRequest,
+                        (setup_packet.wValue >> 8),
+                    });
                 }
             },
             .sent => {},
@@ -79,7 +83,8 @@ const OurUsbConfigurationDescriptor = packed struct {
 
     hid_interface: usb_std.InterfaceDescriptor,
     hid_descriptor: usb_std.HidDescriptor,
-    hid_descriptor_report_instance: usb_std.HidDescriptorReportInstance, // The actual report descriptor is not included here.
+    hid_descriptor_report_instance: usb_std.HidDescriptorReportInstance,
+    // ... The actual HID report descriptor is not included in the configuration descriptor - see HID spec section 7.1...
     hid_endpoint: usb_std.EndpointDescriptor,
 };
 
@@ -101,7 +106,7 @@ const usb = mcu.usb(
     OurUsbConfigurationDescriptor{
         .configuration_descriptor = .{
             .wTotalLength = @sizeOf(OurUsbConfigurationDescriptor),
-            .bNumInterfaces = 1,
+            .bNumInterfaces = 1, // 2,
             .bConfigurationValue = 1,
             .iConfiguration = 0,
             .bmAttributes = 0x80,
@@ -126,6 +131,24 @@ const usb = mcu.usb(
             .bInterfaceProtocol = 0,
             .iInterface = 5,
         },
+        .hid_descriptor = .{
+            .bLength = @sizeOf(usb_std.HidDescriptor) + 1 * @sizeOf(usb_std.HidDescriptorReportInstance),
+            .bcdHID = 0x0101,
+            .bCountryCode = 0,
+            .bNumDescriptors = 1,
+        },
+        .hid_descriptor_report_instance = .{
+            .wDescriptorLength = todo_report_descriptor_length,
+        },
+        .hid_endpoint = .{
+            // Endpoint 1, IN
+            .bEndpointAddress = 0b1_000_0001,
+            // Interrupt
+            .bmAttributes = 0b000000_11,
+            .wMaxPacketSize = todo_report_length,
+            // This is in milliseconds:
+            .bInterval = 10,
+        },
     },
     &.{
         "Ting",             // 1
@@ -136,6 +159,9 @@ const usb = mcu.usb(
     },
     &.{},
 );
+
+const todo_report_descriptor_length = 10;
+const todo_report_length = 8;
 
 pub fn log(
     comptime level: std.log.Level,

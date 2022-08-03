@@ -78,7 +78,7 @@ pub const HidDescriptor = packed struct {
     bLength: u8,
     bDescriptorType: u8 = DescriptorType,
     bcdHID: u16, // Should probaby be 0x0101
-    bCountryCode: u8, // 33 is US
+    bCountryCode: u8, // 33 is US, but spec says should probably be 0.
     bNumDescriptors: u8,
 };
 
