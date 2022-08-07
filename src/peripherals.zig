@@ -51,7 +51,7 @@ pub const Usart = packed struct {
 };
 pub const usart1 = @intToPtr(*volatile Usart, 0x4001_3800);
 
-pub const syscfg = @intToPtr(*volatile packed struct{
+pub const syscfg = @intToPtr(*volatile packed struct {
     _reserved0: u32,
     _reserved1: u32,
     _reserved2: u32,
@@ -63,13 +63,13 @@ pub const syscfg = @intToPtr(*volatile packed struct{
     cfgr3: u32,
 }, 0x4001_0000);
 
-pub const crs = @intToPtr(*volatile packed struct{
+pub const crs = @intToPtr(*volatile packed struct {
     cr: u32,
     cfgr: u32,
 }, 0x4000_6C00);
 
 // USB uses 16-bit registers.
-pub const usb = @intToPtr(*volatile packed struct{
+pub const usb = @intToPtr(*volatile packed struct {
     ep0r: u16,
     _reserved0: u16,
     ep1r: u16,

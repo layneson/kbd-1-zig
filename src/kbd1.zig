@@ -1,4 +1,5 @@
 const std = @import("std");
+const options = @import("options");
 
 const startup = @import("startup.zig");
 const mcu = @import("mcu.zig");
@@ -45,7 +46,18 @@ pub fn main() noreturn {
 
     var counter: u8 = 0;
 
+    var hid_endpoint_can_send = true;
+    var c_on = false;
+
     while (true) {
+        if (usb.getDeviceState() == .configured and hid_endpoint_can_send) {
+            var packet = [1]u8{ 0 } ** 8;
+            if (c_on) packet[1] = 0x06;
+            usb.sendPacket(hid_endpoint_addr, &packet);
+            hid_endpoint_can_send = false;
+            c_on = !c_on;
+        }
+
         switch (usb.poll()) {
             .none => {},
             .reset => {},
@@ -61,21 +73,26 @@ pub fn main() noreturn {
                 if ((setup_packet.bmRequestType & 0b0110_0000) == 0b0100_0000 and setup_packet.bRequest == 2) {
                     usb.sendPacket(0, &.{});
                 } else if ((setup_packet.bmRequestType & 0b0110_0000) == 0b0100_0000 and setup_packet.bRequest == 3) {
-                    usb.sendPacket(0, &[_]u8 { counter });
+                    usb.sendPacket(0, &[_]u8{counter});
                     counter += 1;
-                }  else if (
-                    setup_packet.bmRequestType == 0x81 and
+                } else if (setup_packet.bmRequestType == 0x81 and
                     setup_packet.bRequest == 0x06 and
-                    (setup_packet.wValue >> 8) == 0x22
-                ) {
+                    (setup_packet.wValue >> 8) == 0x22)
+                {
                     // HID GET_DESCRIPTOR(Report)
 
                     usb.sendPacket(0, &report_descriptor);
-                } else if (
-                    setup_packet.bmRequestType == 0x21 and
-                    setup_packet.bRequest == 0x0A
-                ) {
+                } else if (setup_packet.bmRequestType == 0x21 and
+                    setup_packet.bRequest == 0x0A)
+                {
                     // HID SET_IDLE
+
+                    usb.sendPacket(0, &.{});
+                } else if (setup_packet.bmRequestType == 0x21 and
+                    setup_packet.bRequest == 0x0B)
+                {
+                    // HID SET_PROTOCOL
+                    // We are not boot protocol, so we just pretend we did something.
 
                     usb.sendPacket(0, &.{});
                 } else {
@@ -86,7 +103,13 @@ pub fn main() noreturn {
                     });
                 }
             },
-            .sent => {},
+            .sent => |ep| {
+                std.log.info("sent {d}", .{ ep });
+
+                if (ep != hid_endpoint_addr) continue;
+
+                hid_endpoint_can_send = true;
+            },
             .received => {},
         }
     }
@@ -136,7 +159,7 @@ const usb = mcu.usb(
             .bInterfaceProtocol = 0,
             .iInterface = 4,
         },
-        
+
         .hid_interface = .{
             .bInterfaceNumber = 1,
             .bAlternateSetting = 0,
@@ -157,7 +180,7 @@ const usb = mcu.usb(
         },
         .hid_endpoint = .{
             // Endpoint 1, IN
-            .bEndpointAddress = 0b1_000_0001,
+            .bEndpointAddress = 0b1_000_0000 | (@as(u8, 0x0F) & @as(u8, hid_endpoint_addr)),
             // Interrupt
             .bmAttributes = 0b000000_11,
             .wMaxPacketSize = report_length,
@@ -166,38 +189,48 @@ const usb = mcu.usb(
         },
     },
     &.{
-        "Ting",             // 1
-        "SuperTestThingy",  // 2
-        "SN0001",           // 3
-        "Vendor Thingy",    // 4
-        "StupidKeyboard",   // 5
+        "Ting", // 1
+        "SuperTestThingy", // 2
+        "SN0001", // 3
+        "Vendor Thingy", // 4
+        "StupidKeyboard", // 5
     },
-    &.{},
+    &.{
+        .{
+            .address = hid_endpoint_addr,
+            .ep_type = .interrupt,
+            .direction = .in,
+            .max_packet_size = report_length,
+        },
+    },
 );
 
-// This website can be used to verify the descriptor: https://eleccelerator.com/usbdescreqparser/.
-const report_length = 8;
+const hid_endpoint_addr = 1;
+
 // The report looks like the following (least-significant byte first):
 //   <modifiers - 1 byte> <key code - 1 byte> * 7
-const report_descriptor = [_]u8 {
-    0x0B, 0x06, 0x00, 0x01, 0x00,   // Usage(Generic Desktop, Keyboard)
-    0xA1, 0x01,                     // Collection(Application)
-    0x06, 0x07, 0x00,               //   Usage Page(Keyboard Keys)
-    0x19, 0xE0,                     //   Usage Minimum(0xE0)
-    0x29, 0xE7,                     //   Usage Maximum(0xE7)
-    0x15, 0x00,                     //   Logical Minimum(0x00)
-    0x25, 0x01,                     //   Logical Maximum(0x01)
-    0x75, 0x01,                     //   Report Size(1)
-    0x95, 0x08,                     //   Report Count(8)
-    0x82, 0x02, 0x00,               //   Input(Data, Variable, Absolute)
-    0x19, 0x00,                     //   Usage Minimum(0x00)
-    0x29, 0x65,                     //   Usage Maximum(0x65)
-    0x15, 0x00,                     //   Logical Minimum(0x00)
-    0x25, 0x65,                     //   Logical Maximum(0x65)
-    0x75, 0x08,                     //   Report Size(8)
-    0x95, 0x07,                     //   Report Count(7)
-    0x81, 0x00,                     //   Input(Data, Array, Absolute)
-    0xC0,                           // End Collection
+const report_length = 8;
+
+// This website can be used to verify the descriptor: https://eleccelerator.com/usbdescreqparser/.
+const report_descriptor = [_]u8{
+    0x0B, 0x06, 0x00, 0x01, 0x00, // Usage(Generic Desktop, Keyboard)
+    0xA1, 0x01, // Collection(Application)
+    0x06, 0x07, 0x00, //   Usage Page(Keyboard Keys)
+    0x19, 0xE0, //   Usage Minimum(0xE0)
+    0x29, 0xE7, //   Usage Maximum(0xE7)
+    0x15, 0x00, //   Logical Minimum(0x00)
+    0x25, 0x01, //   Logical Maximum(0x01)
+    0x75, 0x01, //   Report Size(1)
+    0x95, 0x08, //   Report Count(8)
+    0x82, 0x02, 0x00, //   Input(Data, Variable, Absolute)
+    0x19, 0x00, //   Usage Minimum(0x00)
+    0x29, 0x65, //   Usage Maximum(0x65)
+    0x15, 0x00, //   Logical Minimum(0x00)
+    0x25, 0x65, //   Logical Maximum(0x65)
+    0x75, 0x08, //   Report Size(8)
+    0x95, 0x07, //   Report Count(7)
+    0x81, 0x00, //   Input(Data, Array, Absolute)
+    0xC0, // End Collection
 };
 
 pub fn log(
@@ -206,6 +239,8 @@ pub fn log(
     comptime format: []const u8,
     args: anytype,
 ) void {
+    if (!options.enable_semihosting) return;
+
     const level_prefix = "[" ++ switch (level) {
         .err => "E",
         .warn => "W",

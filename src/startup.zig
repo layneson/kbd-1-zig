@@ -64,7 +64,7 @@ export var vector_table linksection(".isr_vector") = [_]?Isr{
 };
 
 export var irq_table linksection(".irq_vector") = blk: {
-    var irqs = [1]Isr{ Dummy_Handler } ** std.meta.fields(peripherals.Interrupt).len;
+    var irqs = [1]Isr{Dummy_Handler} ** std.meta.fields(peripherals.Interrupt).len;
 
     if (@hasDecl(root, "irq_vectors")) {
         const root_irqs = root.irq_vectors;

@@ -287,14 +287,14 @@ pub const UsbEndpointInfo = struct {
 
 /// - configuration_descriptor: A packed struct of the entire
 ///   configuration descriptor (including all other descriptors).
-///   
+///
 ///   The first member must be of type usb_std.ConfigurationDescriptor.
 ///   Its wTotalLength should be set appropriately.
 pub fn usb(
     comptime device_descriptor: usb_std.DeviceDescriptor,
     comptime configuration_descriptor: anytype,
     comptime string_descriptors: []const []const u8,
-    comptime endpoint_info: []UsbEndpointInfo,
+    comptime endpoint_info: []const UsbEndpointInfo,
 ) type {
     return struct {
         pub fn init() void {
@@ -395,7 +395,7 @@ pub fn usb(
                 switch (direction) {
                     0 => {
                         // IN
-                        
+
                         // Clear CTR_TX.
                         ep_reg.clearCtrTx();
 
@@ -426,7 +426,7 @@ pub fn usb(
         /// it is returned to the user.
         fn handleSetup() PollResult {
             const ep_reg = endpointRegister(0);
-            
+
             defer {
                 // We are finished processing.
                 // Set status back to VALID so that another packet can be received.
@@ -447,34 +447,31 @@ pub fn usb(
             // Let's go back to the default (NAK).
             ep_reg.setStatTx(0b10);
 
-            if (
-                setup_packet.bmRequestType == 0b1000_0000 and
+            if (setup_packet.bmRequestType == 0b1000_0000 and
                 setup_packet.bRequest == 6 and
-                (setup_packet.wValue >> 8) == 1
-            ) {
+                (setup_packet.wValue >> 8) == 1)
+            {
                 // GET_DESCRIPTOR (device).
                 // Reply with device descriptor.
 
                 const device_descriptor_bytes = std.mem.toBytes(device_descriptor);
-                
+
                 sendPacket(0, device_descriptor_bytes[0..std.math.min(device_descriptor_bytes.len, setup_packet.wLength)]);
-            } else if (
-                setup_packet.bmRequestType == 0 and
-                setup_packet.bRequest == 5
-            ) {
+            } else if (setup_packet.bmRequestType == 0 and
+                setup_packet.bRequest == 5)
+            {
                 // SET_ADDRESS.
 
                 global_state.address = @intCast(u8, setup_packet.wValue);
-                
+
                 // Status stage.
                 sendPacket(0, &.{});
 
                 global_state.should_set_address_on_next_status_stage = true;
-            } else if (
-                setup_packet.bmRequestType == 0b1000_0000 and
+            } else if (setup_packet.bmRequestType == 0b1000_0000 and
                 setup_packet.bRequest == 6 and
-                (setup_packet.wValue >> 8) == 2
-            ) {
+                (setup_packet.wValue >> 8) == 2)
+            {
                 // GET_DESCRIPTOR (configuration).
 
                 var configuration_descriptor_bytes = std.mem.toBytes(configuration_descriptor);
@@ -483,11 +480,10 @@ pub fn usb(
                     @intCast(u16, configuration_descriptor_bytes.len),
                     setup_packet.wLength,
                 )]);
-            } else if (
-                setup_packet.bmRequestType == 0b1000_0000 and
+            } else if (setup_packet.bmRequestType == 0b1000_0000 and
                 setup_packet.bRequest == 6 and
-                (setup_packet.wValue >> 8) == 3
-            ) {
+                (setup_packet.wValue >> 8) == 3)
+            {
                 // GET_DESCRIPTOR (string).
 
                 const descriptor_idx = @intCast(u8, setup_packet.wValue);
@@ -521,19 +517,17 @@ pub fn usb(
                         setup_packet.wLength,
                     )]);
                 }
-            } else if (
-                setup_packet.bmRequestType == 0b1000_0000 and
-                setup_packet.bRequest == 0
-            ) {
+            } else if (setup_packet.bmRequestType == 0b1000_0000 and
+                setup_packet.bRequest == 0)
+            {
                 // GET_STATUS.
 
                 const status = [_]u8{ 0, 0 };
 
                 sendPacket(0, &status);
-            } else if (
-                setup_packet.bmRequestType == 0b0000_0000 and
-                setup_packet.bRequest == 9
-            ) {
+            } else if (setup_packet.bmRequestType == 0b0000_0000 and
+                setup_packet.bRequest == 9)
+            {
                 // SET_CONFIGURATION.
 
                 // Status stage.
@@ -667,7 +661,7 @@ pub fn usb(
                         if (bl_size == 0 and num_blocks == 0) @compileError("usb: invalid receive buffer max size");
                         if (real_size > 1024) @compileError("usb: receive buffer max size too large");
                     }
-                    
+
                     setBits16(&table_entry.rx_count, 10, 14, num_blocks);
                     setBits16(&table_entry.rx_count, 15, 15, bl_size);
 
@@ -692,6 +686,8 @@ pub fn usb(
         /// This signals to the peripheral that the packet has been read and can
         /// be internally overwritten by the next incoming packet. Thus, this
         /// can only be called once per incoming packet!
+        ///
+        /// To discard the packet, pass a zero-length buffer.
         pub fn readPacket(ep_addr: u3, buffer: []u8) void {
             const ep_reg = endpointRegister(ep_addr);
             const table_entry = getBdtBidirectionalEntry(ep_addr);
@@ -699,7 +695,9 @@ pub fn usb(
             // Count is only 10 bits of the rx_count register.
             const packet_len = @intCast(u16, getBits16(table_entry.rx_count, 0, 9));
 
-            copyFromPbm(buffer[0..std.math.min(buffer.len, packet_len)], table_entry.rx_addr);
+            if (buffer.len > 0) {
+                copyFromPbm(buffer[0..std.math.min(buffer.len, packet_len)], table_entry.rx_addr);
+            }
 
             // Set status back to VALID so that another packet can be received.
             ep_reg.setStatRx(0b11);
@@ -857,14 +855,14 @@ pub fn usb(
         /// Copies provided bytes to PBM.
         /// PBM only supports 8 and 16-bit access, so we need to make sure the compiler doesn't
         /// try to get fancy and produce word copies.
-        /// 
+        ///
         /// This is dest-source order since that's what Zig's mem.copy does.
         fn copyToPbm(dest_offset: u16, source: []const u8) void {
             const dest = @intToPtr([*]volatile u16, mcu.usb_packet_memory_offset + @intCast(usize, dest_offset));
 
             for (source) |source_byte, i| {
                 if (i % 2 == 1) {
-                    dest[i/2] = @intCast(u16, source[i - 1]) | (@intCast(u16, source_byte) << 8);
+                    dest[i / 2] = @intCast(u16, source[i - 1]) | (@intCast(u16, source_byte) << 8);
                 }
             }
 
@@ -893,7 +891,7 @@ pub fn usb(
         /// These are taken from the usb 2.0 spec.
         /// We don't include powered here because there is no difference between
         /// the powered and default states from our perspective.
-        const DeviceState = enum {
+        pub const DeviceState = enum {
             /// Device has been reset (or not, see note above) but not assigned an address.
             default,
             /// Device has an address but has not been configured.
@@ -901,6 +899,10 @@ pub fn usb(
             /// Device has been configured. Normal operation.
             configured,
         };
+
+        pub fn getDeviceState() DeviceState {
+            return global_state.device_state;
+        }
 
         var global_state: State = .{};
     };
@@ -1028,7 +1030,7 @@ pub const semihosting = struct {
     const PrintRawError = error{};
 
     fn printRaw(_: void, str: []const u8) PrintRawError!usize {
-        const sys_write_args = [3]u32 {
+        const sys_write_args = [3]u32{
             @as(u32, 2), // Stderr.
             @ptrToInt(str.ptr),
             str.len,
@@ -1037,8 +1039,7 @@ pub const semihosting = struct {
         asm volatile ("BKPT 0xAB"
             :
             : [sh_op_type] "{R0}" (@as(u32, 0x05)),
-              [sys_write_args] "{R1}" (@ptrToInt(&sys_write_args))
-            :
+              [sys_write_args] "{R1}" (@ptrToInt(&sys_write_args)),
         );
 
         return str.len;
