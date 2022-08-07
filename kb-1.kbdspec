@@ -1,0 +1,128 @@
+VERSION 1
+NAME "kbd-1"
+
+SET_WIDTH 1
+SET_HEIGHT 1
+
+# Offset is x y
+SET_OFFSET 0 0
+
+# Keyboard matrix auto-increments columns
+MAT_ROWMAJOR
+
+KEY "Esc"
+KEY "F1"
+KEY "F2"
+KEY "F3"
+KEY "F4"
+KEY "F5"
+KEY "F6"
+KEY "F7"
+KEY "F8"
+KEY "F9"
+KEY "F10"
+KEY "F11"
+KEY "F12"
+KEY "Action1"
+KEY "Action2"
+KEY "Delete"
+
+MAT_INC_MAJOR
+
+SET_OFFSET 0 1
+KEY "~"
+KEY "1"
+KEY "2"
+KEY "3"
+KEY "4"
+KEY "5"
+KEY "6"
+KEY "7"
+KEY "8"
+KEY "9"
+KEY "0"
+KEY "-"
+KEY "="
+STABILIZER "2u"
+KEY "Backspace" 2
+MAT_INC_MINOR
+KEY "Home"
+
+MAT_INC_MAJOR
+
+SET_OFFSET 0 2
+KEY "Tab" 1.5
+KEY "q"
+KEY "w"
+KEY "e"
+KEY "r"
+KEY "t"
+KEY "y"
+KEY "u"
+KEY "i"
+KEY "o"
+KEY "p"
+KEY "["
+KEY "]"
+KEY "\" 1.5
+MAT_INC_MINOR
+KEY "PgUp"
+
+MAT_INC_MAJOR
+
+SET_OFFSET 0 3
+KEY "Caps Lock" 1.75
+KEY "a"
+KEY "s"
+KEY "d"
+KEY "f"
+KEY "g"
+KEY "h"
+KEY "j"
+KEY "k"
+KEY "l"
+KEY ";"
+KEY "'"
+MAT_INC_MINOR
+STABILIZER "2u"
+KEY "Enter" 2.25
+MAT_INC_MINOR
+KEY "PgDn"
+
+MAT_INC_MAJOR
+
+SET_OFFSET 0 4
+STABILIZER "2u"
+KEY "Shift" 2.25
+KEY "z"
+KEY "x"
+KEY "c"
+KEY "v"
+KEY "b"
+KEY "n"
+KEY "m"
+KEY ","
+KEY "."
+KEY "/"
+KEY "Shift" 1.75
+MAT_INC_MINOR 2
+KEY "Up"
+KEY "End"
+
+MAT_INC_MAJOR
+
+SET_OFFSET 0 5
+KEY "Ctrl" 1.25
+KEY "Win" 1.25
+KEY "Alt" 1.25
+MAT_INC_MINOR 2
+STABILIZER "6.25u"
+KEY "Space" 6.25
+MAT_INC_MINOR 2
+KEY "Alt"
+KEY "Fn"
+Key "Ctrl"
+KEY "Left"
+MAT_INC_MINOR 2
+KEY "Down"
+KEY "Right"
