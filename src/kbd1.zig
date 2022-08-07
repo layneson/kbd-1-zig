@@ -48,11 +48,10 @@ pub fn main() noreturn {
         if (usb.getDeviceState() == .configured and global_keyboard.hid_endpoint_can_send) {
             // Having an if expression inside a tuple literal doesn't work, but this does!
             var packet = [1]u8{ 0 } ** 8;
-            if (global_keyboard.c_on) packet[1] = 0x06;
+            scanKeyMatrix(&packet);
 
             usb.sendPacket(hid_endpoint_addr, &packet);
             global_keyboard.hid_endpoint_can_send = false;
-            global_keyboard.c_on = !global_keyboard.c_on;
         }
 
         handleUsbResult(usb.poll());
@@ -121,6 +120,11 @@ fn handleUsbResult(result: usb.PollResult) void {
         },
         .received => {},
     }
+}
+
+fn scanKeyMatrix(report_buffer: *[report_length]u8) void {
+    std.mem.set(u8, report_buffer, 0);
+    report_buffer[0] = 0x01;
 }
 
 const OurUsbConfigurationDescriptor = packed struct {
