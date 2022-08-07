@@ -63,6 +63,21 @@ pub fn main() noreturn {
                 } else if ((setup_packet.bmRequestType & 0b0110_0000) == 0b0100_0000 and setup_packet.bRequest == 3) {
                     usb.sendPacket(0, &[_]u8 { counter });
                     counter += 1;
+                }  else if (
+                    setup_packet.bmRequestType == 0x81 and
+                    setup_packet.bRequest == 0x06 and
+                    (setup_packet.wValue >> 8) == 0x22
+                ) {
+                    // HID GET_DESCRIPTOR(Report)
+
+                    usb.sendPacket(0, &report_descriptor);
+                } else if (
+                    setup_packet.bmRequestType == 0x21 and
+                    setup_packet.bRequest == 0x0A
+                ) {
+                    // HID SET_IDLE
+
+                    usb.sendPacket(0, &.{});
                 } else {
                     std.log.info("setup: reqtype={x} request={x} value_top={x}", .{
                         setup_packet.bmRequestType,
@@ -106,7 +121,7 @@ const usb = mcu.usb(
     OurUsbConfigurationDescriptor{
         .configuration_descriptor = .{
             .wTotalLength = @sizeOf(OurUsbConfigurationDescriptor),
-            .bNumInterfaces = 1, // 2,
+            .bNumInterfaces = 2,
             .bConfigurationValue = 1,
             .iConfiguration = 0,
             .bmAttributes = 0x80,
@@ -138,14 +153,14 @@ const usb = mcu.usb(
             .bNumDescriptors = 1,
         },
         .hid_descriptor_report_instance = .{
-            .wDescriptorLength = todo_report_descriptor_length,
+            .wDescriptorLength = report_descriptor.len,
         },
         .hid_endpoint = .{
             // Endpoint 1, IN
             .bEndpointAddress = 0b1_000_0001,
             // Interrupt
             .bmAttributes = 0b000000_11,
-            .wMaxPacketSize = todo_report_length,
+            .wMaxPacketSize = report_length,
             // This is in milliseconds:
             .bInterval = 10,
         },
@@ -160,8 +175,30 @@ const usb = mcu.usb(
     &.{},
 );
 
-const todo_report_descriptor_length = 10;
-const todo_report_length = 8;
+// This website can be used to verify the descriptor: https://eleccelerator.com/usbdescreqparser/.
+const report_length = 8;
+// The report looks like the following (least-significant byte first):
+//   <modifiers - 1 byte> <key code - 1 byte> * 7
+const report_descriptor = [_]u8 {
+    0x0B, 0x06, 0x00, 0x01, 0x00,   // Usage(Generic Desktop, Keyboard)
+    0xA1, 0x01,                     // Collection(Application)
+    0x06, 0x07, 0x00,               //   Usage Page(Keyboard Keys)
+    0x19, 0xE0,                     //   Usage Minimum(0xE0)
+    0x29, 0xE7,                     //   Usage Maximum(0xE7)
+    0x15, 0x00,                     //   Logical Minimum(0x00)
+    0x25, 0x01,                     //   Logical Maximum(0x01)
+    0x75, 0x01,                     //   Report Size(1)
+    0x95, 0x08,                     //   Report Count(8)
+    0x82, 0x02, 0x00,               //   Input(Data, Variable, Absolute)
+    0x19, 0x00,                     //   Usage Minimum(0x00)
+    0x29, 0x65,                     //   Usage Maximum(0x65)
+    0x15, 0x00,                     //   Logical Minimum(0x00)
+    0x25, 0x65,                     //   Logical Maximum(0x65)
+    0x75, 0x08,                     //   Report Size(8)
+    0x95, 0x07,                     //   Report Count(7)
+    0x81, 0x00,                     //   Input(Data, Array, Absolute)
+    0xC0,                           // End Collection
+};
 
 pub fn log(
     comptime level: std.log.Level,
