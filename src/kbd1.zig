@@ -44,74 +44,82 @@ pub fn main() noreturn {
 
     std.log.info("Starting loop.", .{});
 
-    var counter: u8 = 0;
-
-    var hid_endpoint_can_send = true;
-    var c_on = false;
-
     while (true) {
-        if (usb.getDeviceState() == .configured and hid_endpoint_can_send) {
+        if (usb.getDeviceState() == .configured and global_keyboard.hid_endpoint_can_send) {
+            // Having an if expression inside a tuple literal doesn't work, but this does!
             var packet = [1]u8{ 0 } ** 8;
-            if (c_on) packet[1] = 0x06;
+            if (global_keyboard.c_on) packet[1] = 0x06;
+
             usb.sendPacket(hid_endpoint_addr, &packet);
-            hid_endpoint_can_send = false;
-            c_on = !c_on;
+            global_keyboard.hid_endpoint_can_send = false;
+            global_keyboard.c_on = !global_keyboard.c_on;
         }
 
-        switch (usb.poll()) {
-            .none => {},
-            .reset => {},
-            .setup => |ep| {
-                if (ep != 0) continue;
+        handleUsbResult(usb.poll());
+    }
+}
 
-                var recv_buffer: [64]u8 = undefined;
-                const packet_len = usb.getPacketLength(ep);
-                usb.readPacket(ep, recv_buffer[0..packet_len]);
+var global_keyboard = struct {
+    counter: u8 = 0,
 
-                const setup_packet = @ptrCast(*usb_std.Setup, recv_buffer[0..packet_len]).*;
+    hid_endpoint_can_send: bool = true,
+    c_on: bool = false,
+}{};
 
-                if ((setup_packet.bmRequestType & 0b0110_0000) == 0b0100_0000 and setup_packet.bRequest == 2) {
-                    usb.sendPacket(0, &.{});
-                } else if ((setup_packet.bmRequestType & 0b0110_0000) == 0b0100_0000 and setup_packet.bRequest == 3) {
-                    usb.sendPacket(0, &[_]u8{counter});
-                    counter += 1;
-                } else if (setup_packet.bmRequestType == 0x81 and
-                    setup_packet.bRequest == 0x06 and
-                    (setup_packet.wValue >> 8) == 0x22)
-                {
-                    // HID GET_DESCRIPTOR(Report)
+fn handleUsbResult(result: usb.PollResult) void {
+    switch (result) {
+        .none => {},
+        .reset => {},
+        .setup => |ep| {
+            if (ep != 0) return;
 
-                    usb.sendPacket(0, &report_descriptor);
-                } else if (setup_packet.bmRequestType == 0x21 and
-                    setup_packet.bRequest == 0x0A)
-                {
-                    // HID SET_IDLE
+            var recv_buffer: [64]u8 = undefined;
+            const packet_len = usb.getPacketLength(ep);
+            usb.readPacket(ep, recv_buffer[0..packet_len]);
 
-                    usb.sendPacket(0, &.{});
-                } else if (setup_packet.bmRequestType == 0x21 and
-                    setup_packet.bRequest == 0x0B)
-                {
-                    // HID SET_PROTOCOL
-                    // We are not boot protocol, so we just pretend we did something.
+            const setup_packet = @ptrCast(*usb_std.Setup, recv_buffer[0..packet_len]).*;
 
-                    usb.sendPacket(0, &.{});
-                } else {
-                    std.log.info("setup: reqtype={x} request={x} value_top={x}", .{
-                        setup_packet.bmRequestType,
-                        setup_packet.bRequest,
-                        (setup_packet.wValue >> 8),
-                    });
-                }
-            },
-            .sent => |ep| {
-                std.log.info("sent {d}", .{ ep });
+            if ((setup_packet.bmRequestType & 0b0110_0000) == 0b0100_0000 and setup_packet.bRequest == 2) {
+                usb.sendPacket(0, &.{});
+            } else if ((setup_packet.bmRequestType & 0b0110_0000) == 0b0100_0000 and setup_packet.bRequest == 3) {
+                usb.sendPacket(0, &[_]u8{global_keyboard.counter});
+                global_keyboard.counter += 1;
+            } else if (setup_packet.bmRequestType == 0x81 and
+                setup_packet.bRequest == 0x06 and
+                (setup_packet.wValue >> 8) == 0x22)
+            {
+                // HID GET_DESCRIPTOR(Report)
 
-                if (ep != hid_endpoint_addr) continue;
+                usb.sendPacket(0, &report_descriptor);
+            } else if (setup_packet.bmRequestType == 0x21 and
+                setup_packet.bRequest == 0x0A)
+            {
+                // HID SET_IDLE
 
-                hid_endpoint_can_send = true;
-            },
-            .received => {},
-        }
+                usb.sendPacket(0, &.{});
+            } else if (setup_packet.bmRequestType == 0x21 and
+                setup_packet.bRequest == 0x0B)
+            {
+                // HID SET_PROTOCOL
+                // We are not boot protocol, so we just pretend we did something.
+
+                usb.sendPacket(0, &.{});
+            } else {
+                std.log.info("setup: reqtype={x} request={x} value_top={x}", .{
+                    setup_packet.bmRequestType,
+                    setup_packet.bRequest,
+                    (setup_packet.wValue >> 8),
+                });
+            }
+        },
+        .sent => |ep| {
+            std.log.info("sent {d}", .{ ep });
+
+            if (ep != hid_endpoint_addr) return;
+
+            global_keyboard.hid_endpoint_can_send = true;
+        },
+        .received => {},
     }
 }
 
