@@ -1,5 +1,6 @@
 const std = @import("std");
 const options = @import("options");
+const kbdspec = @import("kbdspec");
 
 const startup = @import("startup.zig");
 const mcu = @import("mcu.zig");
@@ -18,8 +19,11 @@ pub fn main() noreturn {
     mcu.rcc.apb.setApb1Prescaler(.none);
     mcu.rcc.apb.setApb2Prescaler(.none);
 
+    mcu.rcc.enablePeripheralClock(.gpioa);
     mcu.rcc.enablePeripheralClock(.gpiob);
     mcu.rcc.enablePeripheralClock(.gpioc);
+    mcu.rcc.enablePeripheralClock(.gpiod);
+    mcu.rcc.enablePeripheralClock(.gpioh);
     mcu.rcc.enablePeripheralClock(.usart1);
     mcu.rcc.enablePeripheralClock(.syscfg);
     mcu.rcc.enablePeripheralClock(.crs);
@@ -42,12 +46,14 @@ pub fn main() noreturn {
 
     usb.init();
 
+    setupKeyboardMatrix();
+
     std.log.info("Starting loop.", .{});
 
     while (true) {
         if (usb.getDeviceState() == .configured and global_keyboard.hid_endpoint_can_send) {
             // Having an if expression inside a tuple literal doesn't work, but this does!
-            var packet = [1]u8{ 0 } ** 8;
+            var packet = [1]u8{0} ** 8;
             scanKeyMatrix(&packet);
 
             usb.sendPacket(hid_endpoint_addr, &packet);
@@ -112,7 +118,7 @@ fn handleUsbResult(result: usb.PollResult) void {
             }
         },
         .sent => |ep| {
-            std.log.info("sent {d}", .{ ep });
+            std.log.info("sent {d}", .{ep});
 
             if (ep != hid_endpoint_addr) return;
 
@@ -122,10 +128,95 @@ fn handleUsbResult(result: usb.PollResult) void {
     }
 }
 
+fn setupKeyboardMatrix() void {
+    for (row_map) |row| {
+        mcu.gpio.setMode(row.port, row.pin, .output);
+        mcu.gpio.clear(row.port, row.pin);
+    }
+
+    for (col_map) |col| {
+        mcu.gpio.setMode(col.port, col.pin, .input);
+        mcu.gpio.setResistors(col.port, col.pin, .pull_down);
+    }
+}
+
 fn scanKeyMatrix(report_buffer: *[report_length]u8) void {
     std.mem.set(u8, report_buffer, 0);
-    report_buffer[0] = 0x01;
+    
+    var num_keys_down: usize = 0;
+
+    for (row_map) |row, ridx| {
+        mcu.gpio.set(row.port, row.pin);
+
+        for (col_map) |col, cidx| {
+            if (num_keys_down >= 7) break;
+
+            var press_count: usize = 0;
+            var check_idx: usize = 0;
+            while (check_idx < 10) : (check_idx += 1) {
+                if (mcu.gpio.get(col.port, col.pin)) press_count += 1;
+            }
+
+            if (press_count >= 5) {
+                const hid_id = keycode_matrix[ridx * kbdspec.num_cols + cidx];
+                if (hid_id != 0) {
+                    report_buffer[1 + num_keys_down] = @intCast(u8, @as(u16, 0xFF) & hid_id);
+                    num_keys_down += 1;
+                }
+            }
+        }
+
+        mcu.gpio.clear(row.port, row.pin);
+    }
 }
+
+// Rows are input and columns are output, electrically.
+
+const row_map = [kbdspec.num_rows]GpioPin{
+    .{ .port = .b, .pin = 12 },
+    .{ .port = .b, .pin = 13 },
+    .{ .port = .a, .pin = 15 },
+    .{ .port = .c, .pin = 1 },
+    .{ .port = .c, .pin = 2 },
+    .{ .port = .c, .pin = 3 },
+};
+
+const col_map = [kbdspec.num_cols]GpioPin{
+    .{ .port = .a, .pin = 3 },
+    .{ .port = .c, .pin = 10 },
+    .{ .port = .c, .pin = 11 },
+    .{ .port = .c, .pin = 12 },
+    .{ .port = .d, .pin = 2 },
+    .{ .port = .b, .pin = 3 },
+    .{ .port = .b, .pin = 4 },
+    .{ .port = .b, .pin = 5 },
+    .{ .port = .b, .pin = 6 },
+    .{ .port = .b, .pin = 7 },
+    .{ .port = .c, .pin = 13 },
+    .{ .port = .c, .pin = 14 },
+    .{ .port = .c, .pin = 15 },
+    .{ .port = .h, .pin = 0 },
+    .{ .port = .h, .pin = 1 },
+    .{ .port = .c, .pin = 0 },
+};
+
+// These are HID keycodes.
+// `0` here means there isn't a key at that location (due to the ragged matrix).
+// This is in row-major order.
+const keycode_matrix = b: {
+    var matrix = [1]u8{ 0 } ** (kbdspec.num_rows * kbdspec.num_cols);
+
+    inline for (kbdspec.keys) |key| {
+        matrix[key.row * kbdspec.num_cols + key.col] = key.hid_id;
+    }
+
+    break :b matrix;
+};
+
+const GpioPin = struct {
+    port: mcu.gpio.Port,
+    pin: u4,
+};
 
 const OurUsbConfigurationDescriptor = packed struct {
     configuration_descriptor: usb_std.ConfigurationDescriptor,

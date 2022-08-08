@@ -25,16 +25,19 @@ pub const Gpio = packed struct {
     moder: u32,
     _reserved0: u32,
     _reserved1: u32,
-    _reserved2: u32,
-    _reserved3: u32,
+    pupdr: u32,
+    idr: u32,
     _reserved4: u32,
     bsrr: u32,
     _reserved5: u32,
     afrl: u32,
     afrh: u32,
 };
+pub const gpio_a = @intToPtr(*volatile Gpio, 0x5000_0000);
 pub const gpio_b = @intToPtr(*volatile Gpio, 0x5000_0400);
 pub const gpio_c = @intToPtr(*volatile Gpio, 0x5000_0800);
+pub const gpio_d = @intToPtr(*volatile Gpio, 0x5000_0C00);
+pub const gpio_h = @intToPtr(*volatile Gpio, 0x5000_1C00);
 
 pub const Usart = packed struct {
     cr1: u32,

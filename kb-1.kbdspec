@@ -10,119 +10,119 @@ SET_OFFSET 0 0
 # Keyboard matrix auto-increments columns
 MAT_ROWMAJOR
 
-KEY "Esc"
-KEY "F1"
-KEY "F2"
-KEY "F3"
-KEY "F4"
-KEY "F5"
-KEY "F6"
-KEY "F7"
-KEY "F8"
-KEY "F9"
-KEY "F10"
-KEY "F11"
-KEY "F12"
-KEY "Action1"
-KEY "Action2"
-KEY "Delete"
+KEY "Esc" 0x29
+KEY "F1" 0x3a
+KEY "F2" 0x3b
+KEY "F3" 0x3c
+KEY "F4" 0x3d
+KEY "F5" 0x3e
+KEY "F6" 0x3f
+KEY "F7" 0x40
+KEY "F8" 0x41
+KEY "F9" 0x42
+KEY "F10" 0x43
+KEY "F11" 0x44
+KEY "F12" 0x45
+KEY "Action1" 0x81
+KEY "Action2" 0x80
+KEY "Delete" 0x4c
 
 MAT_INC_MAJOR
 
 SET_OFFSET 0 1
-KEY "~"
-KEY "1"
-KEY "2"
-KEY "3"
-KEY "4"
-KEY "5"
-KEY "6"
-KEY "7"
-KEY "8"
-KEY "9"
-KEY "0"
-KEY "-"
-KEY "="
+KEY "~" 0x35
+KEY "1" 0x1e
+KEY "2" 0x1f
+KEY "3" 0x20
+KEY "4" 0x21
+KEY "5" 0x22
+KEY "6" 0x23
+KEY "7" 0x24
+KEY "8" 0x25
+KEY "9" 0x26
+KEY "0" 0x27
+KEY "-" 0x2d
+KEY "=" 0x2e
 STABILIZER "2u"
-KEY "Backspace" 2
+KEY "Backspace" 0x2a 2
 MAT_INC_MINOR
-KEY "Home"
+KEY "Home" 0x4a
 
 MAT_INC_MAJOR
 
 SET_OFFSET 0 2
-KEY "Tab" 1.5
-KEY "q"
-KEY "w"
-KEY "e"
-KEY "r"
-KEY "t"
-KEY "y"
-KEY "u"
-KEY "i"
-KEY "o"
-KEY "p"
-KEY "["
-KEY "]"
-KEY "\" 1.5
+KEY "Tab" 0x2b 1.5
+KEY "q" 0x14
+KEY "w" 0x1a
+KEY "e" 0x08
+KEY "r" 0x15
+KEY "t" 0x17
+KEY "y" 0x1c
+KEY "u" 0x18
+KEY "i" 0x0c
+KEY "o" 0x12
+KEY "p" 0x13
+KEY "[" 0x2f
+KEY "]" 0x30
+KEY "\" 0x31 1.5
 MAT_INC_MINOR
-KEY "PgUp"
+KEY "PgUp" 0x4b
 
 MAT_INC_MAJOR
 
 SET_OFFSET 0 3
-KEY "Caps Lock" 1.75
-KEY "a"
-KEY "s"
-KEY "d"
-KEY "f"
-KEY "g"
-KEY "h"
-KEY "j"
-KEY "k"
-KEY "l"
-KEY ";"
-KEY "'"
+KEY "Caps Lock" 0x39 1.75
+KEY "a" 0x04
+KEY "s" 0x16
+KEY "d" 0x07
+KEY "f" 0x09
+KEY "g" 0x0a
+KEY "h" 0x0b
+KEY "j" 0x0d
+KEY "k" 0x0e
+KEY "l" 0x0f
+KEY ";" 0x33
+KEY "'" 0x34
 MAT_INC_MINOR
 STABILIZER "2u"
-KEY "Enter" 2.25
+KEY "Enter" 0x28 2.25
 MAT_INC_MINOR
-KEY "PgDn"
+KEY "PgDn" 0x4e
 
 MAT_INC_MAJOR
 
 SET_OFFSET 0 4
 STABILIZER "2u"
-KEY "Shift" 2.25
-KEY "z"
-KEY "x"
-KEY "c"
-KEY "v"
-KEY "b"
-KEY "n"
-KEY "m"
-KEY ","
-KEY "."
-KEY "/"
-KEY "Shift" 1.75
+KEY "Shift" 0xe1 2.25
+KEY "z" 0x1d
+KEY "x" 0x1b
+KEY "c" 0x06
+KEY "v" 0x19
+KEY "b" 0x05
+KEY "n" 0x11
+KEY "m" 0x10
+KEY "," 0x36
+KEY "." 0x37
+KEY "/" 0x38
+KEY "Shift" 0xe5 1.75
 MAT_INC_MINOR 2
-KEY "Up"
-KEY "End"
+KEY "Up" 0x52
+KEY "End" 0x4d
 
 MAT_INC_MAJOR
 
 SET_OFFSET 0 5
-KEY "Ctrl" 1.25
-KEY "Win" 1.25
-KEY "Alt" 1.25
+KEY "Ctrl" 0xe0 1.25
+KEY "Win" 0xe3 1.25
+KEY "Alt" 0xe2 1.25
 MAT_INC_MINOR 2
 STABILIZER "6.25u"
-KEY "Space" 6.25
+KEY "Space" 0x2c 6.25
 MAT_INC_MINOR 2
-KEY "Alt"
-KEY "Fn"
-Key "Ctrl"
-KEY "Left"
+KEY "Alt" 0xe6
+KEY "Fn" 0
+Key "Ctrl" 0xe4
+KEY "Left" 0x50
 MAT_INC_MINOR 2
-KEY "Down"
-KEY "Right"
+KEY "Down" 0x51
+KEY "Right" 0x4f

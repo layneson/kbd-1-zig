@@ -77,8 +77,11 @@ pub const rcc = struct {
     };
 
     pub const Peripheral = enum {
+        gpioa,
         gpiob,
         gpioc,
+        gpiod,
+        gpioh,
         usart1,
         syscfg,
         crs,
@@ -87,8 +90,11 @@ pub const rcc = struct {
 
     pub fn enablePeripheralClock(peripheral: Peripheral) void {
         switch (peripheral) {
+            .gpioa => setBits(&mcu.rcc.iopenr, 0, 0, 1),
             .gpiob => setBits(&mcu.rcc.iopenr, 1, 1, 1),
             .gpioc => setBits(&mcu.rcc.iopenr, 2, 2, 1),
+            .gpiod => setBits(&mcu.rcc.iopenr, 3, 3, 1),
+            .gpioh => setBits(&mcu.rcc.iopenr, 7, 7, 1),
             .usart1 => setBits(&mcu.rcc.apb2enr, 14, 14, 1),
             .syscfg => setBits(&mcu.rcc.apb2enr, 0, 0, 1),
             .crs => setBits(&mcu.rcc.apb1enr, 27, 27, 1),
@@ -130,21 +136,33 @@ pub const rcc = struct {
 };
 
 pub const gpio = struct {
+    pub const Port = enum {
+        a,
+        b,
+        c,
+        d,
+        h,
+    };
+
     pub const Mode = enum {
         input,
         output,
         alternate,
     };
 
-    pub const Port = enum {
-        b,
-        c,
+    pub const Resistors = enum {
+        none,
+        pull_up,
+        pull_down,
     };
 
     pub fn setMode(port: Port, pin: u4, mode: Mode) void {
         const moder = switch (port) {
+            .a => &mcu.gpio_a.moder,
             .b => &mcu.gpio_b.moder,
             .c => &mcu.gpio_c.moder,
+            .d => &mcu.gpio_d.moder,
+            .h => &mcu.gpio_d.moder,
         };
 
         setBitsRuntime(moder, @intCast(u5, pin) * 2, @intCast(u5, pin) * 2 + 1, switch (mode) {
@@ -156,8 +174,11 @@ pub const gpio = struct {
 
     pub fn setAlternateFunction(port: Port, pin: u4, alternate_function: u3) void {
         const reg = switch (port) {
+            .a => if (pin < 8) &mcu.gpio_a.afrl else &mcu.gpio_a.afrh,
             .b => if (pin < 8) &mcu.gpio_b.afrl else &mcu.gpio_b.afrh,
             .c => if (pin < 8) &mcu.gpio_c.afrl else &mcu.gpio_c.afrh,
+            .d => if (pin < 8) &mcu.gpio_d.afrl else &mcu.gpio_d.afrh,
+            .h => if (pin < 8) &mcu.gpio_h.afrl else &mcu.gpio_h.afrh,
         };
 
         const offset = @as(u5, pin % 8) * 4;
@@ -165,10 +186,29 @@ pub const gpio = struct {
         setBitsRuntime(reg, offset, offset + 3, alternate_function);
     }
 
+    pub fn setResistors(port: Port, pin: u4, resistors: Resistors) void {
+        const pupdr = switch (port) {
+            .a => &mcu.gpio_a.pupdr,
+            .b => &mcu.gpio_b.pupdr,
+            .c => &mcu.gpio_c.pupdr,
+            .d => &mcu.gpio_d.pupdr,
+            .h => &mcu.gpio_h.pupdr,
+        };
+
+        setBitsRuntime(pupdr, @intCast(u5, pin) * 2, @intCast(u5, pin) * 2 + 1, switch (resistors) {
+            .none => 0b00,
+            .pull_up => 0b01,
+            .pull_down => 0b10,
+        });
+    }
+
     pub fn set(port: Port, pin: u4) void {
         const bsrr = switch (port) {
+            .a => &mcu.gpio_a.bsrr,
             .b => &mcu.gpio_b.bsrr,
             .c => &mcu.gpio_c.bsrr,
+            .d => &mcu.gpio_d.bsrr,
+            .h => &mcu.gpio_h.bsrr,
         };
 
         setBitsRuntime(bsrr, pin, pin, 1);
@@ -176,11 +216,26 @@ pub const gpio = struct {
 
     pub fn clear(port: Port, pin: u4) void {
         const bsrr = switch (port) {
+            .a => &mcu.gpio_a.bsrr,
             .b => &mcu.gpio_b.bsrr,
             .c => &mcu.gpio_c.bsrr,
+            .d => &mcu.gpio_d.bsrr,
+            .h => &mcu.gpio_h.bsrr,
         };
 
         setBitsRuntime(bsrr, @intCast(u5, pin) + 16, @intCast(u5, pin) + 16, 1);
+    }
+
+    pub fn get(port: Port, pin: u4) bool {
+        const idr = switch (port) {
+            .a => &mcu.gpio_a.idr,
+            .b => &mcu.gpio_b.idr,
+            .c => &mcu.gpio_c.idr,
+            .d => &mcu.gpio_d.idr,
+            .h => &mcu.gpio_h.idr,
+        };
+
+        return getBitsRuntime(idr.*, pin, pin) != 0;
     }
 };
 

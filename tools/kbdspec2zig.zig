@@ -6,8 +6,8 @@ pub fn main() anyerror!u8 {
     const raw_args = try std.process.argsAlloc(arena.allocator());
     const args = raw_args[1..];
 
-    if (args.len < 1) {
-        std.log.err("[!] Usage: kbdspec2zig <kbdspec file>", .{});
+    if (args.len < 2) {
+        std.log.err("[!] Usage: kbdspec2zig <kbdspec file> <output file>", .{});
         return 1;
     }
 
@@ -16,13 +16,15 @@ pub fn main() anyerror!u8 {
         return 1;
     };
 
+    const output_path = args[1];
+
     var parser = Parser.init(input);
 
     parser.skipWhitespace();
     try parser.expectLiteral("VERSION");
     parser.skipWhitespace();
 
-    const version = try parser.expectInteger();
+    const version = try parser.expectInteger(i32);
     if (version != 1) return error.InvalidVersion;
     parser.expectNewline();
 
@@ -58,6 +60,8 @@ pub fn main() anyerror!u8 {
         } else if (equalsIgnoreCase("KEY", cmd)) {
             const key_name = try parser.expectString();
             parser.skipWhitespace();
+            const hid_id = try parser.expectInteger(u16);
+            parser.skipWhitespace();
             const key_width = if (isNumberChar(parser.peek())) try parser.expectFloat() else current_width;
             parser.skipWhitespace();
             const key_height = if (isNumberChar(parser.peek())) try parser.expectFloat() else current_height;
@@ -71,6 +75,7 @@ pub fn main() anyerror!u8 {
                 .mat_col = mat_col,
                 .name = key_name,
                 .id = keys.items.len,
+                .hid_id = hid_id,
                 .stabilizer_name = next_stabilizer_name,
             });
 
@@ -85,7 +90,7 @@ pub fn main() anyerror!u8 {
         } else if (equalsIgnoreCase("MAT_COLUMNMAJOR", cmd)) {
             mat_row_major = false;
         } else if (equalsIgnoreCase("MAT_INC_MAJOR", cmd)) {
-            const inc_amount = if (isNumberChar(parser.peek())) try parser.expectInteger() else 1;
+            const inc_amount = if (isNumberChar(parser.peek())) try parser.expectInteger(i32) else 1;
             if (mat_row_major) {
                 mat_row += inc_amount;
                 mat_col = 0;
@@ -94,18 +99,40 @@ pub fn main() anyerror!u8 {
                 mat_row = 0;
             }
         } else if (equalsIgnoreCase("MAT_INC_MINOR", cmd)) {
-            const inc_amount = if (isNumberChar(parser.peek())) try parser.expectInteger() else 1;
+            const inc_amount = if (isNumberChar(parser.peek())) try parser.expectInteger(i32) else 1;
             if (mat_row_major) {
                 mat_col += inc_amount;
             } else {
                 mat_row += inc_amount;
             }
-        } else return error.UnknownCommand;
+        } else {
+            std.log.err("unknown command: {s}", .{ cmd });
+            return error.UnknownCommand;
+        }
 
         parser.expectNewline();
     }
 
-    std.log.info("Found {d} keys", .{ keys.items.len });
+    var out_file = try std.fs.cwd().createFile(output_path, .{});
+    defer out_file.close();
+
+    const writer = out_file.writer();
+
+    var num_rows: i32 = 0;
+    var num_cols: i32 = 0;
+
+    try writer.writeAll("pub const keys = [_]Key{\n");
+    for (keys.items) |key| {
+        try writer.print("    .{{ .name = \"{}\", .row = {d}, .col = {d}, .hid_id = {d} }},\n", .{ std.zig.fmtEscapes(key.name), key.mat_row, key.mat_col, key.hid_id });
+
+        if (key.mat_row + 1 > num_rows) num_rows = key.mat_row + 1;
+        if (key.mat_col + 1 > num_cols) num_cols = key.mat_col + 1;
+    }
+    try writer.writeAll("};\n\n");
+
+    try writer.print("pub const num_rows = {d};\npub const num_cols = {d};\n\n", .{ num_rows, num_cols });
+
+    try writer.writeAll("pub const Key = struct { name: []const u8, row: usize, col: usize, hid_id: u16 };");
 
     return 0;
 }
@@ -119,6 +146,7 @@ const Key = struct {
     mat_col: i32,
     name: []const u8,
     id: usize,
+    hid_id: u16,
     stabilizer_name: ?[]const u8,
 };
 
@@ -202,11 +230,33 @@ const Parser = struct {
         p.discard();
     }
 
-    pub fn expectInteger(p: *Parser) !i32 {
+    const IntegerBase = enum {
+        b10,
+        b16,
+    };
+
+    pub fn expectInteger(p: *Parser, comptime T: type) !T {
         if (!isNumberChar(p.peek())) return error.ParseKbdspec;
+        const first_char_is_zero = p.peek() == '0';
+        p.advance();
+
+        if (!isNumberChar(p.peek())) {
+            if (first_char_is_zero and (p.peek() == 'x' or p.peek() == 'X')) {
+                p.advance();
+                p.discard();
+
+                return try expectHexInteger(p, T);
+            }
+        }
         while (isNumberChar(p.peek())) p.advance();
 
-        return std.fmt.parseInt(i32, p.match(), 10) catch return error.ParseKbdspec;
+        return std.fmt.parseInt(T, p.match(), 10) catch return error.ParseKbdspec;
+    }
+
+    pub fn expectHexInteger(p: *Parser, comptime T: type) !T {
+        while (isNumberChar(p.peek()) or isHexChar(p.peek())) p.advance();
+
+        return std.fmt.parseInt(T, p.match(), 16) catch return error.ParseKbdspec;
     }
 
     pub fn expectFloat(p: *Parser) !f32 {
@@ -248,6 +298,10 @@ fn isWordChar(c: u8, first_letter: bool) bool {
 
 fn isNumberChar(c: u8) bool {
     return c >= '0' and c <= '9';
+}
+
+fn isHexChar(c: u8) bool {
+    return (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F');
 }
 
 fn isSpace(c: u8) bool {
